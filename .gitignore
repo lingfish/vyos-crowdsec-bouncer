@@ -1,0 +1,4 @@
+spool/
+*.log
+.env
+test/tmp/
