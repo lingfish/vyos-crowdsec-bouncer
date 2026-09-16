@@ -82,19 +82,24 @@ set container name cs-bouncer image 'your-registry/vyos-crowdsec-bouncer:latest'
 set container name cs-bouncer allow-host-networks
 set container name cs-bouncer environment CROWDSEC_LAPI_URL value 'https://lapi.example.com:8080'
 set container name cs-bouncer environment API_KEY value '<LAPI_BOUNCER_KEY>'
-set container name cs-bouncer device source '/config/crowdsec/vyos-bouncer.conf'
-set container name cs-bouncer device destination '/etc/crowdsec/vyos-bouncer.conf'
+set container name cs-bouncer volume 'bouncer-conf' source '/config/crowdsec/vyos-bouncer.conf'
+set container name cs-bouncer volume 'bouncer-conf' destination '/etc/crowdsec/vyos-bouncer.conf'
+set container name cs-bouncer volume 'bouncer-conf' mode 'ro'
 set container name cs-bouncer restart 'always'
 ```
 
 Notes:
 
+- Use `volume` (not `device`) for the conf file. VyOS `device` maps to podman `--device`, which
+  only accepts device nodes — a regular file fails with *"not a valid device: not a device node"*.
 - `allow-host-networks` gives the container access to `127.0.0.1:443` (the VyOS API) and lets
   `curl` reach LAPI outbound. The bouncer needs **no** capabilities.
 - The `CROWDSEC_LAPI_URL` / `API_KEY` env vars fill `${CROWDSEC_LAPI_URL}` / `${API_KEY}` in
   `bouncer.yaml` (expanded by the image entrypoint).
 - Optional: `set container name cs-bouncer environment VYOS_BOUNCER_CONF value '/etc/crowdsec/vyos-bouncer.conf'` (already the script default).
 - Persistent logs land in `show log container cs-bouncer`.
+- `restart 'always'` means `podman stop` will be immediately resurrected by systemd; use
+  `podman restart` for a deliberate cold restart.
 
 ## 5. Commit
 
@@ -106,8 +111,8 @@ save
 ## 6. Verify
 
 ```bash
-# members appear as bans stream in
-run show firewall group
+# in op-mode (no `run` prefix interactively):
+show firewall group
 
 # force a test ban from the LAPI host:
 cscli decisions add --ip 203.0.113.7 -d 10m
