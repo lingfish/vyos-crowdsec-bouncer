@@ -3,6 +3,7 @@
 Targets VyOS **1.4 (sagitta) LTS** and later (HTTP REST API + `allow-host-networks` containers).
 
 All commands run from config mode (`configure`) and are committed once at the end.
+`add container image` is the exception: it runs in **op-mode** (before entering `configure`).
 
 ## 1. HTTPS API (loopback-only + API key)
 
@@ -75,7 +76,16 @@ sudo install -m 600 -o root -g root vyos-bouncer.conf /config/crowdsec/vyos-boun
 # edit /config/crowdsec/vyos-bouncer.conf and set VYOS_API_KEY
 ```
 
-Configure the container:
+Pull the image **first**, in op-mode. VyOS stores container images in podman's local
+storage and does **not** auto-pull them at commit — it only warns and skips starting the
+container (see [vyos.dev/T4487](https://vyos.dev/T4487)):
+
+```bash
+add container image ghcr.io/lingfish/vyos-crowdsec-bouncer:latest
+show container image   # confirm it's present
+```
+
+Then enter config mode and configure the container:
 
 ```bash
 set container name cs-bouncer image 'ghcr.io/lingfish/vyos-crowdsec-bouncer:latest'
@@ -117,6 +127,18 @@ show firewall group
 # force a test ban from the LAPI host:
 cscli decisions add --ip 203.0.113.7 -d 10m
 ```
+
+## Troubleshooting
+
+- **`WARNING: Image "..." does not exist locally ... Container will not be started!`** —
+  you committed before pulling the image. Fix in op-mode, then restart the already-applied
+  config (commit will not start it retroactively):
+
+  ```bash
+  add container image ghcr.io/lingfish/vyos-crowdsec-bouncer:latest
+  restart container cs-bouncer
+  show container
+  ```
 
 ## Cleanup / uninstall
 

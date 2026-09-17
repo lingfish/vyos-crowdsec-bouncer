@@ -95,6 +95,10 @@ registry (requires a `podman login` to GHCR first).
    make build
    ```
 
+   On the VyOS box the image is pulled via `add container image` (op-mode), not `podman pull` —
+   see [`vyos-config.md`](vyos-config.md). The image is **linux/amd64 only**; an arm64 VyOS
+   router will refuse to run it.
+
 4. **Test locally** (no VyOS needed):
 
    ```bash
