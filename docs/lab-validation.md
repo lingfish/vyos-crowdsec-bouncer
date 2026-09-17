@@ -36,9 +36,9 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
 | Startup re-sync / reboot recovery | decision active in LAPI, group wiped, cold `podman restart` | logs `adding 1 decision`; member repopulated |
 | Batching | 20 concurrent ops (unit harness) | 1 batched `/configure` request |
 | **Short-TTL auto-expiry** | `cscli decisions add --ip 10.9.0.77 -d 1m`, then **no manual delete**; member polled until gone | member appeared (`17s`), traffic dropped (`000`); member **auto-removed ~57s after the 1m expiry**, attacker recovered (`200`). *Issue 3.* |
-| Ban (IPv6) | `cscli decisions add --ip fd00:9::77 -d 2h` | member appears in `CROWDSEC-BANNED-V6` (`ipv6-address-group`), referenced by `ipv6-input-filter-100` **and** `ipv6-forward-filter-100` |
+| Ban (IPv6) | `cscli decisions add --ip fd00:9::77 -d 2h` | member appears in `CROWDSEC-BANNED-V6` (`ipv6-address-group`) after `16s`, referenced by `ipv6-input-filter-100` **and** `ipv6-forward-filter-100` (`ip6 saddr @A6_CROWDSEC-BANNED-V6`). *Issue 1.* |
 | Packet drop (IPv6) | netns attacker (src `fd00:9::77`) → listener `[fd00:9::1]:8082` | `000` / 5s timeout (dropped) |
-| Unban (IPv6) | `cscli decisions delete --ip fd00:9::77` | member removed (`N/D`); attacker recovers (`200`, ~1ms) |
+| Unban (IPv6) | `cscli decisions delete --ip fd00:9::77` | member removed after `13s` (`N/D`); attacker recovers (`200`, ~1ms) |
 
 Control observations: unbanned source = `200` (~1ms); banned source = `000` (3s). The only
 variable is group membership, so the drop is attributable to the bouncer.
@@ -56,6 +56,14 @@ variable is group membership, so the drop is attributable to the bouncer.
 5. **Members live in the running config**, not just the kernel — but are not `save`d, so they are
    lost on reboot. This is why startup re-sync matters, and it works (cold start re-pulls all
    active LAPI decisions).
+6. **IPv6 firewall rules reference groups via `address-group`/`network-group`, not
+   `ipv6-address-group`/`ipv6-network-group`.** The `firewall ipv6 ... source group` node has no
+   `ipv6-*` children (`Configuration path ... is not valid`); VyOS maps `address-group` →
+   `ipv6-address-group` when the rule family is IPv6 (see `firewall.py`). `provision.sh` and
+   `vyos-config.md` originally used the invalid `ipv6-*` nodes, so the IPv6 drop rules silently
+   had **no source group** (a bare `action drop`, which would drop all IPv6). Fixed to
+   `source group address-group` / `source group network-group`; confirmed live: rules compile to
+   `ip6 saddr @A6_CROWDSEC-BANNED-V6` / `@N6_CROWDSEC-BANNED-NET-V6`. *Issue 1.*
 
 ## Reproducible via `make lab`
 
