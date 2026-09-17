@@ -32,7 +32,7 @@ VyOS firewall address-groups → nftables (vyos_filter) → input + forward hook
 
 Each batch of changes triggers a VyOS config commit (the firewall is regenerated from config).
 `vyos-bouncer.sh` **coalesces** decisions into a single API call per short window to bound commit
-frequency. If commit latency becomes a problem under heavy ban churn, see `docs/alternatives.md`.
+frequency. If commit latency becomes a problem under heavy ban churn, see [`docs/alternatives.md`](docs/alternatives.md).
 
 ## Components
 
@@ -42,10 +42,10 @@ frequency. If commit latency becomes a problem under heavy ban churn, see `docs/
 | `vyos-bouncer.sh` | decision → VyOS HTTPS API translator (the only custom code) |
 | `vyos-bouncer.conf` | API URL/key, group names, batching window (mounted, `0600`) |
 | `Dockerfile` | `FROM crowdsecurity/custom-bouncer:v0.0.19` + curl + script/config |
-| `vyos-config.md` | copy-paste VyOS configuration |
+| [`vyos-config.md`](vyos-config.md) | copy-paste VyOS configuration |
 | `test/` | mock VyOS API + integration test harness |
 | `lab/` | reproducible isolated VyOS + LAPI lab (`make lab-up` / `lab-test-expiry` / `lab-down`) |
-| `docs/lab-validation.md` | end-to-end results against a real VyOS + LAPI |
+| [`docs/lab-validation.md`](docs/lab-validation.md) | end-to-end results against a real VyOS + LAPI |
 
 ## Validation
 
@@ -82,7 +82,7 @@ registry (requires a `podman login` to GHCR first).
    cscli bouncers add vyos-bouncer -o raw
    ```
 
-2. **Configure VyOS** per `vyos-config.md`: HTTPS API (loopback + key), firewall groups and
+2. **Configure VyOS** per [`vyos-config.md`](vyos-config.md): HTTPS API (loopback + key), firewall groups and
    drop rules, and the container definition.
 
 3. **Get the image** — either pull the published build or build locally:
