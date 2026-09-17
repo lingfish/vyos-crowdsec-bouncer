@@ -13,7 +13,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Integration test (mock VyOS API)
         run: make test
       - name: Dry-run mode
@@ -26,21 +26,20 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/lingfish/vyos-crowdsec-bouncer
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
           flavor: |
             latest=false
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -53,7 +52,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ startsWith(github.ref, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

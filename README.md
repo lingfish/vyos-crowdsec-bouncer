@@ -60,15 +60,10 @@ restart, and short-TTL decision auto-expiry (no manual delete). See
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push and PR:
 
 - `make test` + `make dry-run` (mock VyOS API, no VyOS/container needed).
-- Builds the image and, on `main` or a `v*` tag, publishes it to
+- Builds the image on every run and, on a `v*` tag, publishes it to
   [`ghcr.io/lingfish/vyos-crowdsec-bouncer`](https://github.com/lingfish/vyos-crowdsec-bouncer/pkgs).
 
-Tags published to GHCR:
-
-| Trigger      | Tags                            |
-|--------------|---------------------------------|
-| `main`       | `latest`, `main`                |
-| `v1.2.3` tag | `1.2.3`, `1.2`, `1`             |
+Tags published to GHCR for a `v1.2.3` tag: `1.2.3`, `1.2`, `1`, `latest`.
 
 To cut a release:
 
