@@ -44,13 +44,15 @@ frequency. If commit latency becomes a problem under heavy ban churn, see `docs/
 | `Dockerfile` | `FROM crowdsecurity/custom-bouncer:v0.0.19` + curl + script/config |
 | `vyos-config.md` | copy-paste VyOS configuration |
 | `test/` | mock VyOS API + integration test harness |
+| `lab/` | reproducible isolated VyOS + LAPI lab (`make lab-up` / `lab-test-expiry` / `lab-down`) |
 | `docs/lab-validation.md` | end-to-end results against a real VyOS + LAPI |
 
 ## Validation
 
 Validated end-to-end on a live VyOS rolling (QEMU) with a real LAPI: ban → packet drop,
-unban → recovery, CIDR groups, and startup re-sync after a cold restart. See
-[`docs/lab-validation.md`](docs/lab-validation.md).
+unban → recovery, CIDR groups, startup re-sync after a cold restart, and short-TTL
+decision auto-expiry (no manual delete). See [`docs/lab-validation.md`](docs/lab-validation.md)
+and `lab/` for a reproducible harness (`make lab`).
 
 ## Quick start
 

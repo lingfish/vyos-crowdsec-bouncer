@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# Bring up the isolated VyOS CrowdSec lab.
+#
+#   ./lab/provision.sh
+#
+# Downloads the latest VyOS rolling nightly ISO, boots it in an isolated
+# libvirt network (192.0.2.0/24, no LAN/internet access), configures the
+# bouncer stack exactly like production (VyOS HTTPS API + firewall groups +
+# `set container`), and stages the in-guest attacker netns + listener used
+# by lab/test-expiry.sh.
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+VYOS_JSON_URL="https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/version.json"
+IMAGE="localhost/vyos-crowdsec-bouncer:latest"
+
+mkdir -p "$LAB_CACHE"
+log "== 1/7 ISO =="
+INFO="$(curl -fsSL "$VYOS_JSON_URL")"
+ISO_URL="$(python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["url"])' <<<"$INFO")"
+VERSION="$(python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["version"])' <<<"$INFO")"
+ISO="$LAB_CACHE/vyos-$VERSION-generic-amd64.iso"
+if [[ -f "$ISO" ]]; then
+    log "ISO already cached: $(basename "$ISO")"
+else
+    log "downloading $ISO_URL"
+    curl -fL --retry 3 --retry-delay 5 -o "$ISO" "$ISO_URL"
+fi
+
+log "== 2/7 network + domain =="
+if ! vsh net-info "$NET" >/dev/null 2>&1; then
+    vsh net-define "$LAB/crowdsec-net.xml"
+fi
+if [[ "$(vsh net-info "$NET" 2>/dev/null | awk '/^Active:/{print $2}')" != "yes" ]]; then
+    vsh net-start "$NET"
+fi
+if [[ "$(vsh domstate "$GUEST" 2>/dev/null)" == *running* ]]; then
+    log "$GUEST already running; reusing existing domain"
+else
+    vsh destroy "$GUEST" >/dev/null 2>&1 || true
+    vsh undefine "$GUEST" >/dev/null 2>&1 || true
+    sed "s|__ISO_PATH__|$ISO|" "$LAB/vyos-lab.xml" >"$LAB_CACHE/vyos-lab.gen.xml"
+    vsh define "$LAB_CACHE/vyos-lab.gen.xml" >/dev/null
+    log "starting $GUEST (live ISO boot, please be patient)"
+    vsh start "$GUEST"
+fi
+
+log "== 3/7 base VyOS config (ssh, https api, firewall) =="
+VYOS_API_KEY="$(openssl rand -hex 16)"
+serial --login "$GUEST_USER" "$GUEST_PASS" --timeout 900 --idle-timeout 120 \
+    --cmd "configure" \
+    --cmd "set interfaces ethernet eth0 address 'dhcp'" \
+    --cmd "set service ssh" \
+    --cmd "set service https api keys id crowdsec key '$VYOS_API_KEY'" \
+    --cmd "set service https api rest" \
+    --cmd "set service https listen-address '127.0.0.1'" \
+    --cmd "set service https allow-client address '127.0.0.1'" \
+    --cmd "set firewall group address-group CROWDSEC-BANNED description 'CrowdSec IPv4 bans'" \
+    --cmd "set firewall group ipv6-address-group CROWDSEC-BANNED-V6 description 'CrowdSec IPv6 bans'" \
+    --cmd "set firewall group network-group CROWDSEC-BANNED-NET description 'CrowdSec IPv4 CIDR bans'" \
+    --cmd "set firewall group ipv6-network-group CROWDSEC-BANNED-NET-V6 description 'CrowdSec IPv6 CIDR bans'" \
+    --cmd "set firewall ipv4 input filter rule 100 action 'drop'" \
+    --cmd "set firewall ipv4 input filter rule 100 source group address-group 'CROWDSEC-BANNED'" \
+    --cmd "set firewall ipv4 input filter rule 101 action 'drop'" \
+    --cmd "set firewall ipv4 input filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'" \
+    --cmd "set firewall ipv6 input filter rule 100 action 'drop'" \
+    --cmd "set firewall ipv6 input filter rule 100 source group ipv6-address-group 'CROWDSEC-BANNED-V6'" \
+    --cmd "set firewall ipv6 input filter rule 101 action 'drop'" \
+    --cmd "set firewall ipv6 input filter rule 101 source group ipv6-network-group 'CROWDSEC-BANNED-NET-V6'" \
+    --cmd "set firewall ipv4 forward filter rule 100 action 'drop'" \
+    --cmd "set firewall ipv4 forward filter rule 100 source group address-group 'CROWDSEC-BANNED'" \
+    --cmd "set firewall ipv4 forward filter rule 101 action 'drop'" \
+    --cmd "set firewall ipv4 forward filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'" \
+    --cmd "set firewall ipv6 forward filter rule 100 action 'drop'" \
+    --cmd "set firewall ipv6 forward filter rule 100 source group ipv6-address-group 'CROWDSEC-BANNED-V6'" \
+    --cmd "set firewall ipv6 forward filter rule 101 action 'drop'" \
+    --cmd "set firewall ipv6 forward filter rule 101 source group ipv6-network-group 'CROWDSEC-BANNED-NET-V6'" \
+    --cmd "commit" \
+    --cmd "exit"
+
+GUEST_IP="$(guest_ip)"
+if [[ -z "$GUEST_IP" ]]; then
+    log "waiting for guest DHCP lease"
+    for _ in $(seq 1 90); do
+        GUEST_IP="$(guest_ip)"
+        [[ -n "$GUEST_IP" ]] && break
+        sleep 2
+    done
+fi
+[[ -n "$GUEST_IP" ]] || die "guest never got a DHCP lease"
+log "guest IP: $GUEST_IP"
+
+log "== 4/7 stage guest: bouncer.conf, ssh key, attacker netns, listener =="
+PUBKEY="$(cat "$SSH_KEY.pub" 2>/dev/null || true)"
+if [[ -z "$PUBKEY" ]]; then
+    ssh-keygen -t ed25519 -N '' -f "$SSH_KEY" -C "vyos-crowdsec-bouncer-lab" >/dev/null
+    PUBKEY="$(cat "$SSH_KEY.pub")"
+fi
+CONF="VYOS_API_URL=\"https://127.0.0.1\"
+VYOS_API_KEY=\"$VYOS_API_KEY\"
+ADDRESS_GROUP_V4=\"CROWDSEC-BANNED\"
+ADDRESS_GROUP_V6=\"CROWDSEC-BANNED-V6\"
+NETWORK_GROUP_V4=\"CROWDSEC-BANNED-NET\"
+NETWORK_GROUP_V6=\"CROWDSEC-BANNED-NET-V6\"
+BATCH_WINDOW=\"3\"
+BATCH_MAX_ROUNDS=\"10\"
+API_TIMEOUT=\"30\"
+API_RETRIES=\"3\"
+API_RETRY_DELAY=\"2\"
+SPOOL_DIR=\"/var/spool/crowdsec\""
+CONF_B64="$(printf '%s\n' "$CONF" | base64 -w0)"
+
+guest_root \
+    "pkill -f 'http.server $LISTENER_PORT' 2>/dev/null || true" \
+    "ip netns del attacker 2>/dev/null || true" \
+    "ip link del veth-m 2>/dev/null || true" \
+    "mkdir -p /config/crowdsec /home/vyos/.ssh" \
+    "echo '$CONF_B64' | base64 -d > /config/crowdsec/vyos-bouncer.conf" \
+    "chmod 600 /config/crowdsec/vyos-bouncer.conf" \
+    "echo '$PUBKEY' > /home/vyos/.ssh/authorized_keys" \
+    "chown -R vyos /home/vyos/.ssh && chmod 700 /home/vyos/.ssh && chmod 600 /home/vyos/.ssh/authorized_keys" \
+    "ip netns add attacker" \
+    "ip link add veth-m type veth peer name veth-a" \
+    "ip link set veth-a netns attacker" \
+    "ip addr add 10.9.0.1/24 dev veth-m" \
+    "ip link set veth-m up" \
+    "ip netns exec attacker ip link set lo up" \
+    "ip netns exec attacker ip addr add 10.9.0.77/24 dev veth-a" \
+    "ip netns exec attacker ip link set veth-a up" \
+    "ip netns exec attacker ip route add default via 10.9.0.1" \
+    "nohup python3 -m http.server $LISTENER_PORT --bind 0.0.0.0 >/tmp/listener.log 2>&1 &"
+
+log "== 5/7 bouncer image into guest podman =="
+if ! podman image exists "$IMAGE"; then
+    make -C "$ROOT" build
+fi
+podman save "$IMAGE" | gzip >"$LAB_CACHE/bouncer-image.tar.gz"
+python3 -m http.server "$IMAGE_SERVER_PORT" --bind "$LAPI_BIND" --directory "$LAB_CACHE" >/dev/null 2>&1 &
+HTTP_PID=$!
+trap 'kill "$HTTP_PID" 2>/dev/null || true' EXIT
+wait_for 15 "image http server" curl -fsSI "http://$LAPI_BIND:$IMAGE_SERVER_PORT/bouncer-image.tar.gz"
+guest_root \
+    "curl -fsSL http://$LAPI_BIND:$IMAGE_SERVER_PORT/bouncer-image.tar.gz | podman load" \
+    "podman images"
+kill "$HTTP_PID" 2>/dev/null || true
+trap - EXIT
+
+log "== 6/7 LAPI + bouncer registration =="
+if ! podman image exists crowdsecurity/crowdsec:latest; then
+    podman pull crowdsecurity/crowdsec:latest
+fi
+podman rm -f "$LAPI_NAME" >/dev/null 2>&1 || true
+mkdir -p "$LAB_CACHE/lapi-data"
+podman run -d --name "$LAPI_NAME" -p "$LAPI_BIND:$LAPI_PORT:8080" \
+    -v "$LAB_CACHE/lapi-data:/var/lib/crowdsec/data" crowdsecurity/crowdsec:latest
+wait_for 90 "LAPI ready" podman exec "$LAPI_NAME" cscli decisions list
+podman exec "$LAPI_NAME" cscli bouncers delete vyos-bouncer >/dev/null 2>&1 || true
+LAPI_KEY="$(podman exec "$LAPI_NAME" cscli bouncers add vyos-bouncer -o raw | tr -d '[:space:]')"
+log "bouncer key obtained"
+
+log "== 7/7 deploy bouncer container =="
+serial --login "$GUEST_USER" "$GUEST_PASS" --timeout 900 --idle-timeout 120 \
+    --cmd "configure" \
+    --cmd "set container name cs-bouncer image 'localhost/vyos-crowdsec-bouncer:latest'" \
+    --cmd "set container name cs-bouncer allow-host-networks" \
+    --cmd "set container name cs-bouncer environment CROWDSEC_LAPI_URL value 'http://$LAPI_BIND:$LAPI_PORT'" \
+    --cmd "set container name cs-bouncer environment API_KEY value '$LAPI_KEY'" \
+    --cmd "set container name cs-bouncer volume 'bouncer-conf' source '/config/crowdsec/vyos-bouncer.conf'" \
+    --cmd "set container name cs-bouncer volume 'bouncer-conf' destination '/etc/crowdsec/vyos-bouncer.conf'" \
+    --cmd "set container name cs-bouncer volume 'bouncer-conf' mode 'ro'" \
+    --cmd "set container name cs-bouncer restart 'always'" \
+    --cmd "commit" \
+    --cmd "exit"
+
+log "waiting for cs-bouncer container to be running"
+wait_for 120 "bouncer container running" guest_op "show container"
+log "provision complete (guest IP $GUEST_IP, LAPI http://$LAPI_BIND:$LAPI_PORT)"
+log "next: ./lab/test-expiry.sh"

@@ -35,6 +35,7 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
 | CIDR → network-group | `cscli decisions add --range 198.51.100.0/24` | member appears in `CROWDSEC-BANNED-NET` (`network_group`) |
 | Startup re-sync / reboot recovery | decision active in LAPI, group wiped, cold `podman restart` | logs `adding 1 decision`; member repopulated |
 | Batching | 20 concurrent ops (unit harness) | 1 batched `/configure` request |
+| **Short-TTL auto-expiry** | `cscli decisions add --ip 10.9.0.77 -d 1m`, then **no manual delete**; member polled until gone | member appeared (`17s`), traffic dropped (`000`); member **auto-removed ~57s after the 1m expiry**, attacker recovered (`200`). *Issue 3.* |
 
 Control observations: unbanned source = `200` (~1ms); banned source = `000` (3s). The only
 variable is group membership, so the drop is attributable to the bouncer.
@@ -52,6 +53,21 @@ variable is group membership, so the drop is attributable to the bouncer.
 5. **Members live in the running config**, not just the kernel — but are not `save`d, so they are
    lost on reboot. This is why startup re-sync matters, and it works (cold start re-pulls all
    active LAPI decisions).
+
+## Reproducible via `make lab`
+
+The earlier runs above were manual and out-of-band. `lab/` now scripts the whole
+thing against an **isolated libvirt network** (`192.0.2.0/24`, no LAN/internet
+in the guest) so it can be re-run on demand:
+
+```bash
+make lab-up            # ISO -> boot latest rolling nightly -> configure -> LAPI -> bouncer
+make lab-test-expiry   # issue-3 scenario (short-TTL auto-expiry)
+make lab-down          # teardown (keeps the cached ISO)
+```
+
+See `lab/README.md` for details and gotchas (serial-console automation, the
+non-interactive SSH limitation on this VyOS build, etc.).
 
 ## Environment
 
