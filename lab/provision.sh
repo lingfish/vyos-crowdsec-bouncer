@@ -113,8 +113,12 @@ CONF_B64="$(printf '%s\n' "$CONF" | base64 -w0)"
 guest_root \
     "pkill -f 'http.server $LISTENER_PORT' 2>/dev/null || true" \
     "pkill -f 'http.server $LISTENER_PORT_V6' 2>/dev/null || true" \
+    "pkill -f 'http.server $SERVER_PORT' 2>/dev/null || true" \
+    "pkill -f 'http.server $SERVER_PORT_V6' 2>/dev/null || true" \
     "ip netns del attacker 2>/dev/null || true" \
     "ip link del veth-m 2>/dev/null || true" \
+    "ip netns del server 2>/dev/null || true" \
+    "ip link del veth-s 2>/dev/null || true" \
     "mkdir -p /config/crowdsec /home/vyos/.ssh" \
     "echo '$CONF_B64' | base64 -d > /config/crowdsec/vyos-bouncer.conf" \
     "chmod 600 /config/crowdsec/vyos-bouncer.conf" \
@@ -133,7 +137,23 @@ guest_root \
     "ip netns exec attacker ip route add default via 10.9.0.1" \
     "ip netns exec attacker ip -6 route add default via $V6_GW dev veth-a" \
     "nohup python3 -m http.server $LISTENER_PORT --bind 0.0.0.0 >/tmp/listener.log 2>&1 &" \
-    "nohup python3 -m http.server $LISTENER_PORT_V6 --bind :: >/tmp/listener6.log 2>&1 &"
+    "nohup python3 -m http.server $LISTENER_PORT_V6 --bind :: >/tmp/listener6.log 2>&1 &" \
+    "ip netns add server" \
+    "ip link add veth-s type veth peer name veth-sa" \
+    "ip link set veth-sa netns server" \
+    "ip addr add $SERVER_GW/24 dev veth-s" \
+    "ip -6 addr add $SERVER_GW6/64 dev veth-s" \
+    "ip link set veth-s up" \
+    "ip netns exec server ip link set lo up" \
+    "ip netns exec server ip addr add $SERVER_IP/24 dev veth-sa" \
+    "ip netns exec server ip -6 addr add $SERVER_IP6/64 dev veth-sa" \
+    "ip netns exec server ip link set veth-sa up" \
+    "ip netns exec server ip route add default via $SERVER_GW" \
+    "ip netns exec server ip -6 route add default via $SERVER_GW6 dev veth-sa" \
+    "nohup ip netns exec server python3 -m http.server $SERVER_PORT --bind 0.0.0.0 >/tmp/server-listener.log 2>&1 &" \
+    "nohup ip netns exec server python3 -m http.server $SERVER_PORT_V6 --bind :: >/tmp/server-listener6.log 2>&1 &" \
+    "ip -6 neigh add $SERVER_IP6 lladdr \$(ip netns exec server ip link show veth-sa | sed -n 's/.*link\\/ether \\([0-9a-f:]*\\).*/\\1/p') dev veth-s nud permanent" \
+    "ip -6 neigh add $ATTACKER_IP6 lladdr \$(ip netns exec attacker ip link show veth-a | sed -n 's/.*link\\/ether \\([0-9a-f:]*\\).*/\\1/p') dev veth-m nud permanent"
 
 log "== 5/7 bouncer image into guest podman =="
 if ! podman image exists "$IMAGE"; then

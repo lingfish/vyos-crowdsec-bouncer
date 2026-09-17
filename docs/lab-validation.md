@@ -18,6 +18,10 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
         ▼
   firewall group CROWDSEC-BANNED → ipv4/ipv6 input/forward rule 100 (drop)
   listener 10.0.2.15:8081  +  listener [fd00:9::1]:8082 (IPv6)
+
+  server netns (in VyOS, behind the forward hook)
+    10.9.1.10/24 (fd00:9:1::10/64)  via veth-s 10.9.1.1 (fd00:9:1::1)
+    listeners 10.9.1.10:8083 + [fd00:9:1::10]:8084  ← issue-2 forward targets
 ```
 
 - LAPI: `crowdsecurity/crowdsec` container (host podman).
@@ -39,6 +43,9 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
 | Ban (IPv6) | `cscli decisions add --ip fd00:9::77 -d 2h` | member appears in `CROWDSEC-BANNED-V6` (`ipv6-address-group`) after `16s`, referenced by `ipv6-input-filter-100` **and** `ipv6-forward-filter-100` (`ip6 saddr @A6_CROWDSEC-BANNED-V6`). *Issue 1.* |
 | Packet drop (IPv6) | netns attacker (src `fd00:9::77`) → listener `[fd00:9::1]:8082` | `000` / 5s timeout (dropped) |
 | Unban (IPv6) | `cscli decisions delete --ip fd00:9::77` | member removed after `13s` (`N/D`); attacker recovers (`200`, ~1ms) |
+| **Forward drop (IPv4)** | ban `--ip 10.9.0.77` → attacker netns → **routed server netns** `10.9.1.10:8083` (transits FORWARD) | member in `CROWDSEC-BANNED` after `17s`; `000` while banned; removed `16s`; `200` after unban. Destination is not a VyOS address, so only the forward hook can drop it. *Issue 2.* |
+| **Forward drop (CIDR)** | ban `--range 10.9.0.0/24` → same routed server | member in `CROWDSEC-BANNED-NET` (`network-group`) after `9s`; `000` → removed `13s` → `200`. Forward rule 101. *Issue 2.* |
+| **Forward drop (IPv6)** | ban `--ip fd00:9::77` → routed server `[fd00:9:1::10]:8084` | member in `CROWDSEC-BANNED-V6` after `10s`; `000` → removed `13s` → `200`. Forward rule 100 (v6). *Issue 2.* |
 
 Control observations: unbanned source = `200` (~1ms); banned source = `000` (3s). The only
 variable is group membership, so the drop is attributable to the bouncer.
@@ -64,6 +71,13 @@ variable is group membership, so the drop is attributable to the bouncer.
    had **no source group** (a bare `action drop`, which would drop all IPv6). Fixed to
    `source group address-group` / `source group network-group`; confirmed live: rules compile to
    `ip6 saddr @A6_CROWDSEC-BANNED-V6` / `@N6_CROWDSEC-BANNED-NET-V6`. *Issue 1.*
+7. **VyOS IPv6-ND defect for forwarded veth traffic (rolling nightly).** For *forwarded* IPv6 the
+   guest kernel never emits the ND NS to resolve the peer veth — neighbor entries sit
+   `FAILED`/`INCOMPLETE` and forwarded v6 packets are black-holed with ICMPv6 "address
+   unreachable", even though locally-generated traffic resolves fine and `nft` accepts the
+   packet through every hook (verified with `nft monitor trace`). The lab pins the L2 adjacency
+   with `nud permanent` IPv6 neighbors on `veth-m`/`veth-s` (from the peers' MACs) in
+   `provision.sh`. This is a lab/VM artefact, not a bouncer issue. *Issue 2.*
 
 ## Reproducible via `make lab`
 
@@ -75,6 +89,7 @@ in the guest) so it can be re-run on demand:
 make lab-up            # ISO -> boot latest rolling nightly -> configure -> LAPI -> bouncer
 make lab-test-expiry   # issue-3 scenario (short-TTL auto-expiry)
 make lab-test-ipv6     # issue-1 scenario (IPv6 ban -> drop, unban -> recovery)
+make lab-test-forward  # issue-2 scenario (routed-client forward-path drop)
 make lab-down          # teardown (keeps the cached ISO)
 ```
 
@@ -90,5 +105,4 @@ non-interactive SSH limitation on this VyOS build, etc.).
 
 ## Not covered here
 
-- Forward-path packet drop from an external routed client (forward rule reference is confirmed).
 - Long-running soak / large blocklists.

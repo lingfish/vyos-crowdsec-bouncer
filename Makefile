@@ -3,7 +3,7 @@ REGISTRY  ?= ghcr.io/yourorg
 VERSION   ?= $(shell git describe --tags --always 2>/dev/null || echo latest)
 ENGINE    ?= podman
 
-.PHONY: build test dry-run push clean lab-up lab-test-expiry lab-test-ipv6 lab-down lab
+.PHONY: build test dry-run push clean lab-up lab-test-expiry lab-test-ipv6 lab-test-forward lab-down lab
 
 build:
 	$(ENGINE) build -t $(IMAGE):$(VERSION) .
@@ -29,7 +29,10 @@ lab-test-expiry:
 lab-test-ipv6:
 	./lab/test-ipv6.sh
 
+lab-test-forward:
+	./lab/test-forward.sh
+
 lab-down:
 	./lab/down.sh
 
-lab: lab-up lab-test-expiry lab-test-ipv6
+lab: lab-up lab-test-expiry lab-test-ipv6 lab-test-forward

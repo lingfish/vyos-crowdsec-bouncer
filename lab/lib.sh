@@ -24,8 +24,16 @@ ATTACKER_NET="10.9.0.0/24"
 ATTACKER_IP6="fd00:9::77"
 ATTACKER_NET6="fd00:9::/64"
 V6_GW="fd00:9::1"
+SERVER_IP="10.9.1.10"
+SERVER_NET="10.9.1.0/24"
+SERVER_GW="10.9.1.1"
+SERVER_IP6="fd00:9:1::10"
+SERVER_NET6="fd00:9:1::/64"
+SERVER_GW6="fd00:9:1::1"
 LISTENER_PORT="8081"
 LISTENER_PORT_V6="8082"
+SERVER_PORT="8083"
+SERVER_PORT_V6="8084"
 IMAGE_SERVER_PORT="8000"
 
 SSH_KEY="$LAB_CACHE/id_lab"
@@ -80,21 +88,29 @@ wait_for() {
     return 1
 }
 
+# HTTP status code a request from the attacker netns to the given URL gets.
+# usage: attacker_http_code_to <url>   e.g. attacker_http_code_to "http://$gip:$LISTENER_PORT/"
+attacker_http_code_to() {
+    serial --login "$GUEST_USER" "$GUEST_PASS" --cmd "sudo -i" \
+        --cmd "ip netns exec attacker curl -s -o /dev/null -w 'CODE=%{http_code}' --max-time 5 '$1'" \
+        --cmd "exit" --timeout 30 --idle-timeout 20 2>/dev/null \
+        | grep -oE 'CODE=[0-9]{3}' | tail -n1 | cut -d= -f2
+}
+
 # HTTP status code a request from the attacker netns to the guest listener gets.
 attacker_http_code() {
     local gip
     gip="$(guest_ip)"
-    serial --login "$GUEST_USER" "$GUEST_PASS" --cmd "sudo -i" \
-        --cmd "ip netns exec attacker curl -s -o /dev/null -w 'CODE=%{http_code}' --max-time 5 http://$gip:$LISTENER_PORT/" \
-        --cmd "exit" --timeout 30 --idle-timeout 20 2>/dev/null \
-        | grep -oE 'CODE=[0-9]{3}' | tail -n1 | cut -d= -f2
+    attacker_http_code_to "http://$gip:$LISTENER_PORT/"
 }
 
 # Same, but IPv6: attacker netns -> veth gateway's IPv6 listener. The gateway
 # address is fixed (no DHCP lookup needed, unlike the IPv4 variant).
 attacker_http_code_v6() {
-    serial --login "$GUEST_USER" "$GUEST_PASS" --cmd "sudo -i" \
-        --cmd "ip netns exec attacker curl -s -o /dev/null -w 'CODE=%{http_code}' --max-time 5 'http://[$V6_GW]:$LISTENER_PORT_V6/'" \
-        --cmd "exit" --timeout 30 --idle-timeout 20 2>/dev/null \
-        | grep -oE 'CODE=[0-9]{3}' | tail -n1 | cut -d= -f2
+    attacker_http_code_to "http://[$V6_GW]:$LISTENER_PORT_V6/"
 }
+
+# Forward-path variants: attacker netns -> routed server netns behind VyOS
+# (transits the FORWARD hook; the server is not a VyOS-local address).
+attacker_http_code_fwd()   { attacker_http_code_to "http://$SERVER_IP:$SERVER_PORT/"; }
+attacker_http_code_fwd_v6() { attacker_http_code_to "http://[$SERVER_IP6]:$SERVER_PORT_V6/"; }
