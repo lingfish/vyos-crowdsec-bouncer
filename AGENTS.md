@@ -14,7 +14,7 @@ address-group members via the VyOS HTTPS API. The only custom code is `vyos-boun
 - `make build` — `podman build` by default (`ENGINE=podman`). Image base is Alpine: the
   Dockerfile must keep `apk add curl bash` or the script breaks.
 - `make push` — publishes to `ghcr.io/lingfish/vyos-crowdsec-bouncer` (set `REGISTRY` to
-  override; requires `podman login` to GHCR). CI publishes on `main` and `v*` tags instead.
+  override; requires `podman login` to GHCR). CI builds+publishes on `v*` tags only.
 - No CI, lint, or test framework in this repo; the only checks are `make test`/`make dry-run`.
 
 ## Lab harness (`make lab-up` / `lab-test-expiry` / `lab-down`)
