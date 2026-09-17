@@ -78,7 +78,7 @@ sudo install -m 600 -o root -g root vyos-bouncer.conf /config/crowdsec/vyos-boun
 Configure the container:
 
 ```bash
-set container name cs-bouncer image 'your-registry/vyos-crowdsec-bouncer:latest'
+set container name cs-bouncer image 'ghcr.io/lingfish/vyos-crowdsec-bouncer:latest'
 set container name cs-bouncer allow-host-networks
 set container name cs-bouncer environment CROWDSEC_LAPI_URL value 'https://lapi.example.com:8080'
 set container name cs-bouncer environment API_KEY value '<LAPI_BOUNCER_KEY>'

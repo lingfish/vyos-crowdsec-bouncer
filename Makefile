@@ -1,5 +1,5 @@
 IMAGE     ?= vyos-crowdsec-bouncer
-REGISTRY  ?= ghcr.io/yourorg
+REGISTRY  ?= ghcr.io/lingfish
 VERSION   ?= $(shell git describe --tags --always 2>/dev/null || echo latest)
 ENGINE    ?= podman
 

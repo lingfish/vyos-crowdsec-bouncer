@@ -55,6 +55,30 @@ restart, and short-TTL decision auto-expiry (no manual delete). See
 [`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for a reproducible harness
 (`make lab`).
 
+## CI / published image
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push and PR:
+
+- `make test` + `make dry-run` (mock VyOS API, no VyOS/container needed).
+- Builds the image and, on `main` or a `v*` tag, publishes it to
+  [`ghcr.io/lingfish/vyos-crowdsec-bouncer`](https://github.com/lingfish/vyos-crowdsec-bouncer/pkgs).
+
+Tags published to GHCR:
+
+| Trigger      | Tags                            |
+|--------------|---------------------------------|
+| `main`       | `latest`, `main`                |
+| `v1.2.3` tag | `1.2.3`, `1.2`, `1`             |
+
+To cut a release:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+PRs build the image but never push. `make push` publishes a locally built image to the same
+registry (requires a `podman login` to GHCR first).
+
 ## Quick start
 
 1. **Register the bouncer on your central LAPI** and note the API key:
@@ -66,9 +90,13 @@ restart, and short-TTL decision auto-expiry (no manual delete). See
 2. **Configure VyOS** per `vyos-config.md`: HTTPS API (loopback + key), firewall groups and
    drop rules, and the container definition.
 
-3. **Build the image** (podman):
+3. **Get the image** — either pull the published build or build locally:
 
    ```bash
+   # published image (see "CI / published image" below)
+   podman pull ghcr.io/lingfish/vyos-crowdsec-bouncer:latest
+
+   # or build locally (podman)
    make build
    ```
 
