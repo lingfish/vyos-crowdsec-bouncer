@@ -112,6 +112,7 @@ CONF_B64="$(printf '%s\n' "$CONF" | base64 -w0)"
 
 guest_root \
     "pkill -f 'http.server $LISTENER_PORT' 2>/dev/null || true" \
+    "pkill -f 'http.server $LISTENER_PORT_V6' 2>/dev/null || true" \
     "ip netns del attacker 2>/dev/null || true" \
     "ip link del veth-m 2>/dev/null || true" \
     "mkdir -p /config/crowdsec /home/vyos/.ssh" \
@@ -123,12 +124,16 @@ guest_root \
     "ip link add veth-m type veth peer name veth-a" \
     "ip link set veth-a netns attacker" \
     "ip addr add 10.9.0.1/24 dev veth-m" \
+    "ip -6 addr add $V6_GW/64 dev veth-m" \
     "ip link set veth-m up" \
     "ip netns exec attacker ip link set lo up" \
     "ip netns exec attacker ip addr add 10.9.0.77/24 dev veth-a" \
+    "ip netns exec attacker ip -6 addr add $ATTACKER_IP6/64 dev veth-a" \
     "ip netns exec attacker ip link set veth-a up" \
     "ip netns exec attacker ip route add default via 10.9.0.1" \
-    "nohup python3 -m http.server $LISTENER_PORT --bind 0.0.0.0 >/tmp/listener.log 2>&1 &"
+    "ip netns exec attacker ip -6 route add default via $V6_GW dev veth-a" \
+    "nohup python3 -m http.server $LISTENER_PORT --bind 0.0.0.0 >/tmp/listener.log 2>&1 &" \
+    "nohup python3 -m http.server $LISTENER_PORT_V6 --bind :: >/tmp/listener6.log 2>&1 &"
 
 log "== 5/7 bouncer image into guest podman =="
 if ! podman image exists "$IMAGE"; then

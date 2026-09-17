@@ -18,15 +18,17 @@ its LAN.
 - Deploys the bouncer image (`podman save` → served over HTTP on the isolated
   net → `podman load` in the guest) and a host-side `crowdsecurity/crowdsec`
   LAPI, registers the bouncer, and stages an in-guest **attacker netns**
-  (`10.9.0.77`) with an HTTP listener so packet drops are measurable.
+  (`10.9.0.77`, `fd00:9::77`) with IPv4 + IPv6 HTTP listeners so packet drops
+  are measurable.
 
 ## Usage
 
 ```bash
 make lab-up            # bring up: ISO -> VM -> config -> LAPI -> bouncer
 make lab-test-expiry   # issue 3: short-TTL decision auto-removes on expiry
+make lab-test-ipv6     # issue 1: IPv6 ban -> drop, unban -> recovery
 make lab-down          # destroy VM/network, stop LAPI, purge runtime state
-make lab               # lab-up + lab-test-expiry (fresh-cycle convenience)
+make lab               # lab-up + both scenario tests (fresh-cycle convenience)
 ```
 
 Prereqs on the host: `python3` + `pexpect`, `virsh` (libvirt, qemu:///system
@@ -44,6 +46,7 @@ with the user in the `libvirt` group, `/dev/kvm`), `podman`, `curl`, and
 | `lib.sh` | Shared helpers: `guest_ip`, `guest_op` (op commands via serial), `guest_root` (raw root commands via serial), `attacker_http_code`, `wait_for`. |
 | `provision.sh` | Full bring-up (7 phases, idempotent; see comments in-file). |
 | `test-expiry.sh` | Issue-3 scenario: add `-d 1m` ban → member appears + traffic drops → **no manual delete** → auto-removal on expiry → traffic recovers. |
+| `test-ipv6.sh` | Issue-1 scenario: ban `fd00:9::77` → member in `CROWDSEC-BANNED-V6` (`show firewall group`) + IPv6 drop → unban → traffic recovers. |
 | `down.sh` | Teardown: `virsh destroy`+`undefine` domain & network, remove LAPI container, purge runtime cache (ISO kept). |
 
 ## Notes / gotchas learned

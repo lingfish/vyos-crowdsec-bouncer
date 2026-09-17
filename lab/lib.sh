@@ -21,7 +21,11 @@ SERIAL_PORT="23000"
 
 ATTACKER_IP="10.9.0.77"
 ATTACKER_NET="10.9.0.0/24"
+ATTACKER_IP6="fd00:9::77"
+ATTACKER_NET6="fd00:9::/64"
+V6_GW="fd00:9::1"
 LISTENER_PORT="8081"
+LISTENER_PORT_V6="8082"
 IMAGE_SERVER_PORT="8000"
 
 SSH_KEY="$LAB_CACHE/id_lab"
@@ -82,6 +86,15 @@ attacker_http_code() {
     gip="$(guest_ip)"
     serial --login "$GUEST_USER" "$GUEST_PASS" --cmd "sudo -i" \
         --cmd "ip netns exec attacker curl -s -o /dev/null -w 'CODE=%{http_code}' --max-time 5 http://$gip:$LISTENER_PORT/" \
+        --cmd "exit" --timeout 30 --idle-timeout 20 2>/dev/null \
+        | grep -oE 'CODE=[0-9]{3}' | tail -n1 | cut -d= -f2
+}
+
+# Same, but IPv6: attacker netns -> veth gateway's IPv6 listener. The gateway
+# address is fixed (no DHCP lookup needed, unlike the IPv4 variant).
+attacker_http_code_v6() {
+    serial --login "$GUEST_USER" "$GUEST_PASS" --cmd "sudo -i" \
+        --cmd "ip netns exec attacker curl -s -o /dev/null -w 'CODE=%{http_code}' --max-time 5 'http://[$V6_GW]:$LISTENER_PORT_V6/'" \
         --cmd "exit" --timeout 30 --idle-timeout 20 2>/dev/null \
         | grep -oE 'CODE=[0-9]{3}' | tail -n1 | cut -d= -f2
 }

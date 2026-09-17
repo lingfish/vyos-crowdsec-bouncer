@@ -50,9 +50,10 @@ frequency. If commit latency becomes a problem under heavy ban churn, see `docs/
 ## Validation
 
 Validated end-to-end on a live VyOS rolling (QEMU) with a real LAPI: ban → packet drop,
-unban → recovery, CIDR groups, startup re-sync after a cold restart, and short-TTL
-decision auto-expiry (no manual delete). See [`docs/lab-validation.md`](docs/lab-validation.md)
-and `lab/` for a reproducible harness (`make lab`).
+unban → recovery, IPv4 + IPv6 address groups, CIDR groups, startup re-sync after a cold
+restart, and short-TTL decision auto-expiry (no manual delete). See
+[`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for a reproducible harness
+(`make lab`).
 
 ## Quick start
 
