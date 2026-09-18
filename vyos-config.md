@@ -30,18 +30,26 @@ set firewall group ipv6-network-group CROWDSEC-BANNED-NET-V6 description 'CrowdS
 
 Group names must match `vyos-bouncer.conf`.
 
-## 3. Drop rules (router-local + forwarded traffic)
+## 3. Firewall policy
+
+The design is **fail-open**: only CrowdSec-banned sources are dropped, everything else passes.
+For base chains (the `filter` rule sets below) VyOS's implicit default-action is already `accept`,
+but we state it explicitly so the policy is visible.
 
 Use a **low rule number** so the drop is evaluated before any accept/allow rules.
+
+### 3a. Drop rules (router-local + forwarded traffic)
 
 Protect VyOS itself (input):
 
 ```bash
+set firewall ipv4 input filter default-action 'accept'
 set firewall ipv4 input filter rule 100 action 'drop'
 set firewall ipv4 input filter rule 100 source group address-group 'CROWDSEC-BANNED'
 set firewall ipv4 input filter rule 101 action 'drop'
 set firewall ipv4 input filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'
 
+set firewall ipv6 input filter default-action 'accept'
 set firewall ipv6 input filter rule 100 action 'drop'
 set firewall ipv6 input filter rule 100 source group address-group 'CROWDSEC-BANNED-V6'
 set firewall ipv6 input filter rule 101 action 'drop'
@@ -51,20 +59,78 @@ set firewall ipv6 input filter rule 101 source group network-group 'CROWDSEC-BAN
 Protect services behind VyOS (forward):
 
 ```bash
+set firewall ipv4 forward filter default-action 'accept'
 set firewall ipv4 forward filter rule 100 action 'drop'
 set firewall ipv4 forward filter rule 100 source group address-group 'CROWDSEC-BANNED'
 set firewall ipv4 forward filter rule 101 action 'drop'
 set firewall ipv4 forward filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'
 
+set firewall ipv6 forward filter default-action 'accept'
 set firewall ipv6 forward filter rule 100 action 'drop'
 set firewall ipv6 forward filter rule 100 source group address-group 'CROWDSEC-BANNED-V6'
 set firewall ipv6 forward filter rule 101 action 'drop'
 set firewall ipv6 forward filter rule 101 source group network-group 'CROWDSEC-BANNED-NET-V6'
 ```
 
-> If you use zone-based firewall, add matching rules to the relevant zone's input/forward
-> rule sets instead. Rule **ordering** is what matters — keep the CrowdSec drop rules before
-> your accept rules.
+### 3b. Zone-based firewall alternative
+
+Zone default-actions may only be `drop` or `reject` — **never `accept`**. So with zones, the
+fail-open policy must live in the **named rule-sets** (`default-action 'accept'`), not in the zone.
+Unmatched zone-pairs fall through to the destination zone's default, so any pair you want to
+allow needs its own rule-set (see the warning below).
+
+Minimal setup for an untrusted `WAN`, a trusted `LAN`, and the router itself (`LOCAL`):
+
+```bash
+set firewall zone WAN interface 'eth0'
+set firewall zone WAN default-action 'drop'
+set firewall zone LAN interface 'eth1'
+set firewall zone LAN default-action 'drop'
+set firewall zone LOCAL local-zone
+set firewall zone LOCAL default-action 'drop'
+```
+
+Protect the router (WAN → LOCAL) and services behind VyOS (WAN → LAN). Rule-set names are
+`SRC-DEST`; the drop rules stay low-numbered:
+
+```bash
+# WAN -> LOCAL (protect VyOS itself)
+set firewall ipv4 name WAN-LOCAL default-action 'accept'
+set firewall ipv4 name WAN-LOCAL rule 100 action 'drop'
+set firewall ipv4 name WAN-LOCAL rule 100 source group address-group 'CROWDSEC-BANNED'
+set firewall ipv4 name WAN-LOCAL rule 101 action 'drop'
+set firewall ipv4 name WAN-LOCAL rule 101 source group network-group 'CROWDSEC-BANNED-NET'
+set firewall ipv6-name WAN-LOCAL-6 default-action 'accept'
+set firewall ipv6-name WAN-LOCAL-6 rule 100 action 'drop'
+set firewall ipv6-name WAN-LOCAL-6 rule 100 source group ipv6-address-group 'CROWDSEC-BANNED-V6'
+set firewall ipv6-name WAN-LOCAL-6 rule 101 action 'drop'
+set firewall ipv6-name WAN-LOCAL-6 rule 101 source group ipv6-network-group 'CROWDSEC-BANNED-NET-V6'
+
+# WAN -> LAN (protect services behind VyOS)
+set firewall ipv4 name WAN-LAN default-action 'accept'
+set firewall ipv4 name WAN-LAN rule 100 action 'drop'
+set firewall ipv4 name WAN-LAN rule 100 source group address-group 'CROWDSEC-BANNED'
+set firewall ipv4 name WAN-LAN rule 101 action 'drop'
+set firewall ipv4 name WAN-LAN rule 101 source group network-group 'CROWDSEC-BANNED-NET'
+set firewall ipv6-name WAN-LAN-6 default-action 'accept'
+set firewall ipv6-name WAN-LAN-6 rule 100 action 'drop'
+set firewall ipv6-name WAN-LAN-6 rule 100 source group ipv6-address-group 'CROWDSEC-BANNED-V6'
+set firewall ipv6-name WAN-LAN-6 rule 101 action 'drop'
+set firewall ipv6-name WAN-LAN-6 rule 101 source group ipv6-network-group 'CROWDSEC-BANNED-NET-V6'
+
+# Bind rule-sets to zone pairs
+set firewall zone LOCAL from WAN firewall name 'WAN-LOCAL'
+set firewall zone LOCAL from WAN firewall ipv6-name 'WAN-LOCAL-6'
+set firewall zone LAN from WAN firewall name 'WAN-LAN'
+set firewall zone LAN from WAN firewall ipv6-name 'WAN-LAN-6'
+```
+
+> **Warning:** any zone-pair without a rule-set is dropped by the zone default. With the config
+> above that includes `LAN -> LOCAL`, so you would lock yourself out of the router. Add rule-sets
+> for every pair you need, e.g. a `LAN-LOCAL` rule-set with
+> `state established/related` accepts plus your management allow-rules, and bind it with
+> `set firewall zone LOCAL from LAN firewall name 'LAN-LOCAL'`. Rule **ordering** is what
+> matters — keep the CrowdSec drop rules before any accept rules.
 
 ## 4. Container
 

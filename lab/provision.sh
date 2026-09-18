@@ -59,18 +59,22 @@ serial --login "$GUEST_USER" "$GUEST_PASS" --timeout 900 --idle-timeout 120 \
     --cmd "set firewall group ipv6-address-group CROWDSEC-BANNED-V6 description 'CrowdSec IPv6 bans'" \
     --cmd "set firewall group network-group CROWDSEC-BANNED-NET description 'CrowdSec IPv4 CIDR bans'" \
     --cmd "set firewall group ipv6-network-group CROWDSEC-BANNED-NET-V6 description 'CrowdSec IPv6 CIDR bans'" \
+    --cmd "set firewall ipv4 input filter default-action 'accept'" \
     --cmd "set firewall ipv4 input filter rule 100 action 'drop'" \
     --cmd "set firewall ipv4 input filter rule 100 source group address-group 'CROWDSEC-BANNED'" \
     --cmd "set firewall ipv4 input filter rule 101 action 'drop'" \
     --cmd "set firewall ipv4 input filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'" \
+    --cmd "set firewall ipv6 input filter default-action 'accept'" \
     --cmd "set firewall ipv6 input filter rule 100 action 'drop'" \
     --cmd "set firewall ipv6 input filter rule 100 source group address-group 'CROWDSEC-BANNED-V6'" \
     --cmd "set firewall ipv6 input filter rule 101 action 'drop'" \
     --cmd "set firewall ipv6 input filter rule 101 source group network-group 'CROWDSEC-BANNED-NET-V6'" \
+    --cmd "set firewall ipv4 forward filter default-action 'accept'" \
     --cmd "set firewall ipv4 forward filter rule 100 action 'drop'" \
     --cmd "set firewall ipv4 forward filter rule 100 source group address-group 'CROWDSEC-BANNED'" \
     --cmd "set firewall ipv4 forward filter rule 101 action 'drop'" \
     --cmd "set firewall ipv4 forward filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'" \
+    --cmd "set firewall ipv6 forward filter default-action 'accept'" \
     --cmd "set firewall ipv6 forward filter rule 100 action 'drop'" \
     --cmd "set firewall ipv6 forward filter rule 100 source group address-group 'CROWDSEC-BANNED-V6'" \
     --cmd "set firewall ipv6 forward filter rule 101 action 'drop'" \
