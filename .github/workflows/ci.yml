@@ -48,7 +48,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          outputs: type=tar,dest=/tmp/image.tar
+          outputs: type=docker,dest=/tmp/image.tar
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
