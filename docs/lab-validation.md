@@ -2,24 +2,24 @@
 
 End-to-end validation of the bouncer against a real VyOS instance and a real CrowdSec LAPI.
 
-> **Note:** the results below were recorded against the **original HTTPS-API + address-group
-> design** (per-batch config commits). The project has since moved to the **firewall
-> remote-group** design (see `vyos-config.md`): no VyOS HTTPS API, no config commits, and a
-> single `CROWDSEC-BANNED` remote-group instead of four address/network-groups. The lab was
-> re-run against that design (`make lab-up` + `lab-test-expiry` / `lab-test-ipv6` /
-> `lab-test-forward`, VyOS `2026.09.17-0028-rolling`, remote-group `resolver-interval 10`) and
-> all scenarios pass:
+> **Note:** the project's current design is the **firewall remote-group** model (see
+> `vyos-config.md`): no VyOS HTTPS API, no config commits — the minimal Alpine container mirrors
+> LAPI's active decisions into `bans.txt`, which VyOS polls as a single `CROWDSEC-BANNED`
+> remote-group (`resolver-interval 10`). The results below were re-recorded against that design
+> on 2026-09-18 (`make lab-up` + the three `lab-test-*` scenarios, VyOS
+> `2026.09.17-0028-rolling`, bouncer image `12fb910e3783`). All scenarios pass. The original
+> HTTPS-API + address-group design and its results are kept below for reference.
+
+## Results (remote-group design)
 
 | Test | Result |
 |------|--------|
-| Ban (IPv4, `-d 1m`) | member appears in `R_CROWDSEC-BANNED` after **~10s**; input+forward traffic dropped |
-| **Short-TTL auto-expiry** | member auto-removed ~58s after the 1m expiry — no manual delete, traffic recovers |
-| Ban (IPv6) | `fd00:9::77` in the group after **~7s**; IPv6 drop; unban → recovery in ~3s |
-| Forward (IPv4 address) | routed traffic drops while banned; recovers after unban |
-| Forward (IPv4 CIDR `10.9.0.0/24`) | drops from the same remote-group set (`flags interval`) |
-| Forward (IPv6 address) | drops; recovers |
-
-## Results (original design, for reference)
+| Ban (IPv4, `-d 1m`) | member in `CROWDSEC-BANNED` after **6s**; input+forward traffic dropped |
+| **Short-TTL auto-expiry** | member auto-removed **~52s after the 1m expiry** — no manual delete, traffic recovers |
+| Ban (IPv6 `fd00:9::77`) | member after **14s**; IPv6 drop; unban → removed in 14s → recovery |
+| Forward (IPv4 address `10.9.0.77`) | member after **7s**; routed drop; unban → removed in 13s → recovery |
+| Forward (IPv4 CIDR `10.9.0.0/24`) | member after **10s**; routed drop; unban → removed in 6s → recovery |
+| Forward (IPv6 address `fd00:9::77`) | member after **7s**; routed drop; unban → removed in 7s → recovery |
 
 ## Topology
 
@@ -37,7 +37,7 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
   vyos-domain-resolver → remote-group CROWDSEC-BANNED (resolver-interval 10)
         ▼ R_CROWDSEC-BANNED / R6_CROWDSEC-BANNED nft sets (no commit)
   ipv4/ipv6 input/forward rule 100 (drop, source group remote-group)
-  listener 10.0.2.15:8081  +  listener [fd00:9::1]:8082 (IPv6)
+  listener guest-eth0:8081  +  listener [fd00:9::1]:8082 (IPv6)
 
   server netns (in VyOS, behind the forward hook)
     10.9.1.10/24 (fd00:9:1::10/64)  via veth-s 10.9.1.1 (fd00:9:1::1)
@@ -48,7 +48,7 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
 - VyOS: rolling nightly ISO booted under QEMU/KVM (live image).
 - Bouncer: this project's image, deployed the production way via VyOS `set container`.
 
-## Results
+## Results (original design, for reference)
 
 | Test | Method | Result |
 |------|--------|--------|
@@ -118,7 +118,7 @@ non-interactive SSH limitation on this VyOS build, etc.).
 
 ## Environment
 
-- VyOS: rolling nightly `2026.09.16-0028` (QEMU/KVM, 2 vCPU, 2 GB).
+- VyOS: rolling nightly `2026.09.17-0028` (QEMU/KVM, 2 vCPU, 2 GB).
 - CrowdSec LAPI image: `crowdsecurity/crowdsec` (latest at test time).
 - Bouncer image: `vyos-crowdsec-bouncer:latest` (minimal Alpine + busybox `httpd`, no
   custom-bouncer, no VyOS HTTPS API).

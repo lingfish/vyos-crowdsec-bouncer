@@ -19,17 +19,18 @@ There is **no** stock custom-bouncer, no VyOS HTTPS API, and no config commits f
   override; requires `podman login` to GHCR). CI builds+publishes on `v*` tags only.
 - No CI, lint, or test framework in this repo; the only checks are `make test`/`make check`.
 
-## Lab harness (`make lab-up` / `lab-test-expiry` / `lab-down`)
+## Lab harness (`make lab-up` / `lab-test-expiry` / `lab-test-ipv6` / `lab-test-forward` / `lab-down` / `lab`)
 
 - Reproducible end-to-end lab in `lab/`: boots the latest VyOS rolling nightly
   under libvirt on an **isolated `192.0.2.0/24` network** (no LAN/internet), configures
-  VyOS per `vyos-config.md`, deploys a host LAPI + the bouncer, and runs the expiry test.
-  Needs host `python3`+`pexpect`, `virsh` (libvirt group), `/dev/kvm`, podman.
+  VyOS per `vyos-config.md`, deploys a host LAPI + the bouncer, and runs the three scenario
+  tests (`lab-test-expiry`, `lab-test-ipv6`, `lab-test-forward`). Needs host `python3`+`pexpect`,
+  `virsh` (libvirt group), `/dev/kvm`, podman.
 - Lab gotchas (see `lab/README.md`): the guest console is a raw TCP chardev driven by
   `lab/serial.py` (pexpect); **non-interactive SSH op commands don't work on this VyOS
   build** — use `guest_op`/`guest_root` (serial); avoid `| grep -q` under `set -o pipefail`.
-- NOTE: the lab scripts still target the old API/commit design and are pending the
-  remote-group update.
+- All three scenario tests are validated green against the remote-group design (see
+  `docs/lab-validation.md`); re-run with `make lab` after `make lab-up`.
 
 ## Bouncer script contract
 
