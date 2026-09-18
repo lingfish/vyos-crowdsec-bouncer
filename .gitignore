@@ -1,0 +1,5 @@
+spool/
+*.log
+.env
+test/tmp/
+lab/.cache/

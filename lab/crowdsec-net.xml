@@ -1,0 +1,11 @@
+<network>
+  <name>crowdsec-lab</name>
+  <bridge name='virbr-cs' stp='on' delay='0'/>
+  <!-- No <forward>: the network is isolated. Guests reach the host (192.0.2.1)
+       and each other only; there is no route to the host's LAN or the internet. -->
+  <ip address='192.0.2.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.0.2.50' end='192.0.2.200'/>
+    </dhcp>
+  </ip>
+</network>
