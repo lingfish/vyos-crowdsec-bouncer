@@ -45,40 +45,25 @@ else
     vsh start "$GUEST"
 fi
 
-log "== 3/7 base VyOS config (ssh, https api, firewall) =="
-VYOS_API_KEY="$(openssl rand -hex 16)"
+log "== 3/7 base VyOS config (ssh, firewall remote-group) =="
 serial --login "$GUEST_USER" "$GUEST_PASS" --timeout 900 --idle-timeout 120 \
     --cmd "configure" \
     --cmd "set interfaces ethernet eth0 address 'dhcp'" \
     --cmd "set service ssh" \
-    --cmd "set service https api keys id crowdsec key '$VYOS_API_KEY'" \
-    --cmd "set service https api rest" \
-    --cmd "set service https listen-address '127.0.0.1'" \
-    --cmd "set service https allow-client address '127.0.0.1'" \
-    --cmd "set firewall group address-group CROWDSEC-BANNED description 'CrowdSec IPv4 bans'" \
-    --cmd "set firewall group ipv6-address-group CROWDSEC-BANNED-V6 description 'CrowdSec IPv6 bans'" \
-    --cmd "set firewall group network-group CROWDSEC-BANNED-NET description 'CrowdSec IPv4 CIDR bans'" \
-    --cmd "set firewall group ipv6-network-group CROWDSEC-BANNED-NET-V6 description 'CrowdSec IPv6 CIDR bans'" \
+    --cmd "set firewall group remote-group CROWDSEC-BANNED url 'http://127.0.0.1:8080/bans.txt'" \
+    --cmd "set firewall global-options resolver-interval '10'" \
     --cmd "set firewall ipv4 input filter default-action 'accept'" \
     --cmd "set firewall ipv4 input filter rule 100 action 'drop'" \
-    --cmd "set firewall ipv4 input filter rule 100 source group address-group 'CROWDSEC-BANNED'" \
-    --cmd "set firewall ipv4 input filter rule 101 action 'drop'" \
-    --cmd "set firewall ipv4 input filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'" \
+    --cmd "set firewall ipv4 input filter rule 100 source group remote-group 'CROWDSEC-BANNED'" \
     --cmd "set firewall ipv6 input filter default-action 'accept'" \
     --cmd "set firewall ipv6 input filter rule 100 action 'drop'" \
-    --cmd "set firewall ipv6 input filter rule 100 source group address-group 'CROWDSEC-BANNED-V6'" \
-    --cmd "set firewall ipv6 input filter rule 101 action 'drop'" \
-    --cmd "set firewall ipv6 input filter rule 101 source group network-group 'CROWDSEC-BANNED-NET-V6'" \
+    --cmd "set firewall ipv6 input filter rule 100 source group remote-group 'CROWDSEC-BANNED'" \
     --cmd "set firewall ipv4 forward filter default-action 'accept'" \
     --cmd "set firewall ipv4 forward filter rule 100 action 'drop'" \
-    --cmd "set firewall ipv4 forward filter rule 100 source group address-group 'CROWDSEC-BANNED'" \
-    --cmd "set firewall ipv4 forward filter rule 101 action 'drop'" \
-    --cmd "set firewall ipv4 forward filter rule 101 source group network-group 'CROWDSEC-BANNED-NET'" \
+    --cmd "set firewall ipv4 forward filter rule 100 source group remote-group 'CROWDSEC-BANNED'" \
     --cmd "set firewall ipv6 forward filter default-action 'accept'" \
     --cmd "set firewall ipv6 forward filter rule 100 action 'drop'" \
-    --cmd "set firewall ipv6 forward filter rule 100 source group address-group 'CROWDSEC-BANNED-V6'" \
-    --cmd "set firewall ipv6 forward filter rule 101 action 'drop'" \
-    --cmd "set firewall ipv6 forward filter rule 101 source group network-group 'CROWDSEC-BANNED-NET-V6'" \
+    --cmd "set firewall ipv6 forward filter rule 100 source group remote-group 'CROWDSEC-BANNED'" \
     --cmd "commit" \
     --cmd "exit"
 
@@ -100,18 +85,14 @@ if [[ -z "$PUBKEY" ]]; then
     ssh-keygen -t ed25519 -N '' -f "$SSH_KEY" -C "vyos-crowdsec-bouncer-lab" >/dev/null
     PUBKEY="$(cat "$SSH_KEY.pub")"
 fi
-CONF="VYOS_API_URL=\"https://127.0.0.1\"
-VYOS_API_KEY=\"$VYOS_API_KEY\"
-ADDRESS_GROUP_V4=\"CROWDSEC-BANNED\"
-ADDRESS_GROUP_V6=\"CROWDSEC-BANNED-V6\"
-NETWORK_GROUP_V4=\"CROWDSEC-BANNED-NET\"
-NETWORK_GROUP_V6=\"CROWDSEC-BANNED-NET-V6\"
-BATCH_WINDOW=\"3\"
-BATCH_MAX_ROUNDS=\"10\"
-API_TIMEOUT=\"30\"
-API_RETRIES=\"3\"
-API_RETRY_DELAY=\"2\"
-SPOOL_DIR=\"/var/spool/crowdsec\""
+CONF="[ -z \"\${LAPI_URL:-}\" ] && LAPI_URL=\"http://$LAPI_BIND:$LAPI_PORT\"
+[ -z \"\${API_KEY:-}\" ] && API_KEY=\"CHANGE_ME\"
+[ -z \"\${SCOPES:-}\" ] && SCOPES=\"Ip,Range\"
+[ -z \"\${SKIP_SIMULATED:-}\" ] && SKIP_SIMULATED=\"true\"
+[ -z \"\${BANS_FILE:-}\" ] && BANS_FILE=\"/www/bans.txt\"
+[ -z \"\${REFRESH_SECONDS:-}\" ] && REFRESH_SECONDS=\"5\"
+[ -z \"\${HTTP_BIND:-}\" ] && HTTP_BIND=\"127.0.0.1\"
+[ -z \"\${HTTP_PORT:-}\" ] && HTTP_PORT=\"8080\""
 CONF_B64="$(printf '%s\n' "$CONF" | base64 -w0)"
 
 guest_root \
@@ -160,9 +141,9 @@ guest_root \
     "ip -6 neigh add $ATTACKER_IP6 lladdr \$(ip netns exec attacker ip link show veth-a | sed -n 's/.*link\\/ether \\([0-9a-f:]*\\).*/\\1/p') dev veth-m nud permanent"
 
 log "== 5/7 bouncer image into guest podman =="
-if ! podman image exists "$IMAGE"; then
-    make -C "$ROOT" build
-fi
+# Always rebuild: a stale `:latest` from an earlier run must not be reused
+# after the design changes (layers are cached, so this is fast).
+make -C "$ROOT" build VERSION=latest
 podman save "$IMAGE" | gzip >"$LAB_CACHE/bouncer-image.tar.gz"
 python3 -m http.server "$IMAGE_SERVER_PORT" --bind "$LAPI_BIND" --directory "$LAB_CACHE" >/dev/null 2>&1 &
 HTTP_PID=$!
@@ -192,7 +173,7 @@ serial --login "$GUEST_USER" "$GUEST_PASS" --timeout 900 --idle-timeout 120 \
     --cmd "configure" \
     --cmd "set container name cs-bouncer image 'localhost/vyos-crowdsec-bouncer:latest'" \
     --cmd "set container name cs-bouncer allow-host-networks" \
-    --cmd "set container name cs-bouncer environment CROWDSEC_LAPI_URL value 'http://$LAPI_BIND:$LAPI_PORT'" \
+    --cmd "set container name cs-bouncer environment LAPI_URL value 'http://$LAPI_BIND:$LAPI_PORT'" \
     --cmd "set container name cs-bouncer environment API_KEY value '$LAPI_KEY'" \
     --cmd "set container name cs-bouncer volume 'bouncer-conf' source '/config/crowdsec/vyos-bouncer.conf'" \
     --cmd "set container name cs-bouncer volume 'bouncer-conf' destination '/etc/crowdsec/vyos-bouncer.conf'" \

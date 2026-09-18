@@ -2,26 +2,46 @@
 
 End-to-end validation of the bouncer against a real VyOS instance and a real CrowdSec LAPI.
 
+> **Note:** the results below were recorded against the **original HTTPS-API + address-group
+> design** (per-batch config commits). The project has since moved to the **firewall
+> remote-group** design (see `vyos-config.md`): no VyOS HTTPS API, no config commits, and a
+> single `CROWDSEC-BANNED` remote-group instead of four address/network-groups. The lab was
+> re-run against that design (`make lab-up` + `lab-test-expiry` / `lab-test-ipv6` /
+> `lab-test-forward`, VyOS `2026.09.17-0028-rolling`, remote-group `resolver-interval 10`) and
+> all scenarios pass:
+
+| Test | Result |
+|------|--------|
+| Ban (IPv4, `-d 1m`) | member appears in `R_CROWDSEC-BANNED` after **~10s**; input+forward traffic dropped |
+| **Short-TTL auto-expiry** | member auto-removed ~58s after the 1m expiry — no manual delete, traffic recovers |
+| Ban (IPv6) | `fd00:9::77` in the group after **~7s**; IPv6 drop; unban → recovery in ~3s |
+| Forward (IPv4 address) | routed traffic drops while banned; recovers after unban |
+| Forward (IPv4 CIDR `10.9.0.0/24`) | drops from the same remote-group set (`flags interval`) |
+| Forward (IPv6 address) | drops; recovers |
+
+## Results (original design, for reference)
+
 ## Topology
 
 ```
-crowdsec LAPI (host podman, 127.0.0.1:18080)
+crowdsec LAPI (host podman, 192.0.2.1:18080)
         ▲
-        │ LAPI stream (http)
+        │ GET /v1/decisions (X-Api-Key), polled every 5s
         │
 VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
   └── container cs-bouncer (set container)         10.9.0.77/24 (fd00:9::77/64)
         ├─ allow-host-networks                     via veth-m 10.9.0.1 (fd00:9::1)
         ├─ volume: /config/crowdsec/vyos-bouncer.conf → /etc/crowdsec/vyos-bouncer.conf (ro)
-        └─ env: CROWDSEC_LAPI_URL, API_KEY
-        │ VyOS HTTPS API (https://127.0.0.1, loopback)
-        ▼
-  firewall group CROWDSEC-BANNED → ipv4/ipv6 input/forward rule 100 (drop)
+        └─ env: LAPI_URL, API_KEY
+        ▼ serves bans.txt on 127.0.0.1:8080
+  vyos-domain-resolver → remote-group CROWDSEC-BANNED (resolver-interval 10)
+        ▼ R_CROWDSEC-BANNED / R6_CROWDSEC-BANNED nft sets (no commit)
+  ipv4/ipv6 input/forward rule 100 (drop, source group remote-group)
   listener 10.0.2.15:8081  +  listener [fd00:9::1]:8082 (IPv6)
 
   server netns (in VyOS, behind the forward hook)
     10.9.1.10/24 (fd00:9:1::10/64)  via veth-s 10.9.1.1 (fd00:9:1::1)
-    listeners 10.9.1.10:8083 + [fd00:9:1::10]:8084  ← issue-2 forward targets
+    listeners 10.9.1.10:8083 + [fd00:9:1::10]:8084  ← forward-path targets
 ```
 
 - LAPI: `crowdsecurity/crowdsec` container (host podman).
@@ -100,7 +120,8 @@ non-interactive SSH limitation on this VyOS build, etc.).
 
 - VyOS: rolling nightly `2026.09.16-0028` (QEMU/KVM, 2 vCPU, 2 GB).
 - CrowdSec LAPI image: `crowdsecurity/crowdsec` (latest at test time).
-- Bouncer image: `vyos-crowdsec-bouncer:latest` (`crowdsecurity/custom-bouncer:v0.0.19` base).
+- Bouncer image: `vyos-crowdsec-bouncer:latest` (minimal Alpine + busybox `httpd`, no
+  custom-bouncer, no VyOS HTTPS API).
 - podman in guest: 5.8.4; host: 5.4.2.
 
 ## Not covered here

@@ -1,17 +1,21 @@
 #!/bin/bash
 # vyos-bouncer.sh
 #
-# CrowdSec Custom Bouncer -> VyOS HTTPS API translator.
-# Called by crowdsec-custom-bouncer as:
-#   vyos-bouncer.sh <add|del> <value> [duration] [reason] [json]
+# CrowdSec LAPI -> VyOS remote-group list generator.
 #
-# - value may be IPv4/IPv6 or CIDR.
-# - Decisions are spooled and flushed in batches (one VyOS /configure commit
-#   per short quiet window) to bound config-commit frequency.
-# - Fail-open: API errors are logged and retried; existing members untouched.
-# - --dry-run / -n logs the intended API call and exits without POSTing.
+# Pull-based: the served list always reflects LAPI's current *active*
+# decisions (GET /v1/decisions only returns non-expired entries), so
+# add/delete/expiry are handled implicitly by re-fetching.
+#
+#   vyos-bouncer.sh refresh     fetch decisions, atomically rewrite the list
+#   vyos-bouncer.sh --check     fetch and print the list to stdout (no write)
+#
+# Fail-open: on any LAPI/HTTP failure the existing list file is left
+# untouched and the script exits non-zero, so busybox httpd keeps serving
+# the last-good list and VyOS's resolver falls back to its cached copy.
 
 set -u
+set -o pipefail
 
 log() { echo "[vyos-bouncer] $(date -Is) $*"; }
 
@@ -21,142 +25,67 @@ if [[ -f "$CONF" ]]; then
     source "$CONF"
 fi
 
-: "${VYOS_API_URL:=https://127.0.0.1}"
-: "${VYOS_API_KEY:=}"
-: "${ADDRESS_GROUP_V4:=CROWDSEC-BANNED}"
-: "${ADDRESS_GROUP_V6:=CROWDSEC-BANNED-V6}"
-: "${NETWORK_GROUP_V4:=CROWDSEC-BANNED-NET}"
-: "${NETWORK_GROUP_V6:=CROWDSEC-BANNED-NET-V6}"
-: "${BATCH_WINDOW:=3}"
-: "${BATCH_MAX_ROUNDS:=10}"
-: "${API_TIMEOUT:=30}"
-: "${API_RETRIES:=3}"
-: "${API_RETRY_DELAY:=2}"
-: "${SPOOL_DIR:=/var/spool/crowdsec}"
+: "${LAPI_URL:=}"
+: "${API_KEY:=}"
+: "${SCOPES:=Ip,Range}"
+: "${SKIP_SIMULATED:=true}"
+: "${BANS_FILE:=/www/bans.txt}"
 
-is_ipv6() { [[ "$1" == *:* ]]; }
-is_cidr() { [[ "$1" == */* ]]; }
-
-validate_value() {
-    local v="$1"
-    [[ -n "$v" ]] || return 1
-    [[ "$v" =~ ^[0-9a-fA-F.:/_-]+$ ]] || return 1
-    [[ "$v" == *.* || "$v" == *:* ]] || return 1
-    return 0
-}
-
-# Emit the vyos path node + group name for a value.
-group_node_for() {
-    local val="$1"
-    if is_ipv6 "$val"; then
-        if is_cidr "$val"; then
-            echo "ipv6-network-group|${NETWORK_GROUP_V6}"
-        else
-            echo "ipv6-address-group|${ADDRESS_GROUP_V6}"
-        fi
-    else
-        if is_cidr "$val"; then
-            echo "network-group|${NETWORK_GROUP_V4}"
-        else
-            echo "address-group|${ADDRESS_GROUP_V4}"
-        fi
-    fi
-}
-
-# Build a single /configure command object.
-cmd_for() {
-    local op="$1" val="$2" node gname child opname
-    IFS='|' read -r node gname <<<"$(group_node_for "$val")"
-    if [[ "$node" == *network* ]]; then child="network"; else child="address"; fi
-    if [[ "$op" == "del" ]]; then opname="delete"; else opname="set"; fi
-    printf '{"op":"%s","path":["firewall","group","%s","%s","%s","%s"]}' \
-        "$opname" "$node" "$gname" "$child" "$val"
-}
-
-call_api() {
-    local payload="$1" http_code rc attempt
-    for attempt in $(seq 1 "$API_RETRIES"); do
-        http_code=$(curl -sk --max-time "$API_TIMEOUT" -o /dev/null -w '%{http_code}' \
-            -X POST "${VYOS_API_URL}/configure" \
-            --data-urlencode "data=$payload" \
-            --data-urlencode "key=$VYOS_API_KEY" 2>/dev/null)
-        rc=$?
-        if [[ "$rc" -eq 0 && "$http_code" =~ ^2 ]]; then
-            log "OK: HTTP $http_code"
-            return 0
-        fi
-        log "WARN: API call failed (rc=$rc http=$http_code) attempt $attempt/$API_RETRIES"
-        [[ $attempt -lt "$API_RETRIES" ]] && sleep "$API_RETRY_DELAY"
-    done
-    log "ERROR: exhausted retries posting to ${VYOS_API_URL}/configure"
-    return 1
-}
-
-# Collect pending spooled ops until the set stabilizes, then POST once.
-flush() {
-    local prev=-1 count=0 round=0 f op val
-    while :; do
-        round=$((round + 1))
-        sleep "$BATCH_WINDOW"
-        count=$(find "$SPOOL_DIR" -maxdepth 1 -name 'op-*' 2>/dev/null | wc -l)
-        if [[ "$count" -eq 0 || "$count" -eq "$prev" || "$round" -ge "$BATCH_MAX_ROUNDS" ]]; then
-            break
-        fi
-        prev="$count"
-    done
-
-    local cmds=()
-    for f in "$SPOOL_DIR"/op-*; do
-        [[ -e "$f" ]] || continue
-        read -r op val <"$f" || continue
-        cmds+=("$(cmd_for "$op" "$val")")
-    done
-    rm -f "$SPOOL_DIR"/op-*
-
-    [[ "${#cmds[@]}" -eq 0 ]] && return 0
-
-    local payload
-    if [[ "${#cmds[@]}" -eq 1 ]]; then
-        payload="${cmds[0]}"
-    else
-        payload="$(IFS=,; printf '[%s]' "${cmds[*]}")"
-    fi
-
-    log "payload: $payload"
-    if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        log "DRY-RUN: would POST ${VYOS_API_URL}/configure"
-        return 0
-    fi
-    call_api "$payload"
-}
-
-spool_and_flush() {
-    local op="$1" val="$2"
-    mkdir -p "$SPOOL_DIR"
-    echo "$op $val" >"$SPOOL_DIR/op-$(date +%s%N)-$RANDOM"
-    (
-        flock -x 9 || return 0
-        flush
-    ) 9>"$SPOOL_DIR/.lock"
+fetch_scope() {
+    curl -sfk --max-time 20 \
+        -H "X-Api-Key: $API_KEY" \
+        "$LAPI_URL/v1/decisions?scope=$1"
 }
 
 main() {
-    local DRY_RUN=false
-    if [[ "${1:-}" == "--dry-run" || "${1:-}" == "-n" ]]; then
-        DRY_RUN=true
-        shift
-    fi
-    local action="${1:-}" value="${2:-}"
-    if [[ -z "$action" || -z "$value" ]]; then
-        log "usage: $0 [--dry-run] <add|del> <ip|cidr> [duration reason json]"
+    local mode="${1:-}"
+    if [[ -z "$LAPI_URL" || -z "$API_KEY" ]]; then
+        log "ERROR: LAPI_URL and API_KEY must be set"
         exit 1
     fi
-    if ! validate_value "$value"; then
-        log "ERROR: rejecting invalid value '$value'"
+
+    # LAPI returns `null` (not `[]`) when a scope has no decisions; `.[]?`
+    # iterates an array and yields nothing on null instead of erroring.
+    local jq_filter='.[]?'
+    if [[ "$SKIP_SIMULATED" == "true" ]]; then
+        jq_filter='.[]? | select(.simulated != true)'
+    fi
+
+    local tmp rc scope
+    tmp="$(mktemp)"
+    rc=0
+    for scope in ${SCOPES//,/ }; do
+        if ! fetch_scope "$scope" | jq -r "$jq_filter | .value" >>"$tmp"; then
+            log "ERROR: LAPI request failed for scope '$scope'"
+            rc=1
+            break
+        fi
+    done
+
+    if [[ "$rc" -ne 0 ]]; then
+        rm -f "$tmp"
+        log "ERROR: leaving $BANS_FILE unchanged"
         exit 1
     fi
-    log "spooling $action $value"
-    spool_and_flush "$action" "$value"
+
+    local list
+    list="$(sort -u "$tmp")"
+    rm -f "$tmp"
+
+    if [[ "$mode" == "--check" ]]; then
+        [[ -n "$list" ]] && printf '%s\n' "$list"
+        return 0
+    fi
+
+    local dir="$BANS_FILE.tmp"
+    mkdir -p "$(dirname "$BANS_FILE")"
+    if [[ -n "$list" ]]; then
+        printf '%s\n' "$list" >"$dir"
+    else
+        : >"$dir"
+    fi
+    mv "$dir" "$BANS_FILE"
+    log "refreshed $BANS_FILE ($(wc -l <"$BANS_FILE") entries)"
 }
 
 main "$@"

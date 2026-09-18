@@ -22,7 +22,7 @@ log "guest IP: $GUEST_IP"
 
 member_present() {
     local out
-    out="$(guest_op "show firewall group")"
+    out="$(guest_op "show firewall group detail")"
     [[ "$out" == *"$ATTACKER_IP"* ]]
 }
 

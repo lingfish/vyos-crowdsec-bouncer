@@ -4,7 +4,7 @@
 #   ./lab/test-ipv6.sh
 #
 # Bans the attacker netns' IPv6 address (fd00:9::77), confirms membership in
-# the ipv6-address-group via `show firewall group`, measures the drop to the
+# the ipv6-address-group via `show firewall group detail`, measures the drop to the
 # IPv6 listener, then unbans and confirms recovery. Mirrors the IPv4 flow from
 # docs/lab-validation.md.
 #
@@ -24,14 +24,14 @@ log "guest IP: $(guest_ip)  v6 attacker: $ATTACKER_IP6"
 
 member_present_v6() {
     local out
-    out="$(guest_op "show firewall group")"
+    out="$(guest_op "show firewall group detail")"
     [[ "$out" == *"$ATTACKER_IP6"* ]]
 }
 
 member_under_v6_group() {
     local out
-    out="$(guest_op "show firewall group")"
-    [[ "$out" == *"CROWDSEC-BANNED-V6"* && "$out" == *"$ATTACKER_IP6"* ]]
+    out="$(guest_op "show firewall group detail")"
+    [[ "$out" == *"CROWDSEC-BANNED"* && "$out" == *"$ATTACKER_IP6"* ]]
 }
 
 member_absent_v6() {
@@ -49,7 +49,7 @@ fi
 
 echo "== add IPv6 ban =="
 podman exec "$LAPI_NAME" cscli decisions add --ip "$ATTACKER_IP6" -d 2h >/dev/null
-log "waiting for member $ATTACKER_IP6 to appear in CROWDSEC-BANNED-V6"
+log "waiting for member $ATTACKER_IP6 to appear in CROWDSEC-BANNED"
 T_APPEAR=$SECONDS
 if wait_for 90 "group member $ATTACKER_IP6" member_present_v6; then
     log "member appeared after $((SECONDS - T_APPEAR))s"
@@ -61,9 +61,9 @@ else
     exit 1
 fi
 if member_under_v6_group; then
-    ok "member under CROWDSEC-BANNED-V6 (ipv6-address-group)"
+    ok "member under CROWDSEC-BANNED (remote-group, IPv6 set)"
 else
-    bad "member not shown under CROWDSEC-BANNED-V6"
+    bad "member not shown under CROWDSEC-BANNED"
 fi
 
 code="$(attacker_http_code_v6)"

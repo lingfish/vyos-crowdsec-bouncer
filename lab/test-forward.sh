@@ -6,11 +6,12 @@
 #   ./lab/test-forward.sh
 #
 # Three scenarios, each: baseline 200 -> ban -> member in group
-# (`show firewall group`) -> drop (000 / curl timeout) -> unban -> member gone
-# -> recovery (200):
-#   1. IPv4 address-group  (ban --ip 10.9.0.77      -> CROWDSEC-BANNED)
-#   2. IPv4 network-group  (ban --range 10.9.0.0/24 -> CROWDSEC-BANNED-NET)
-#   3. IPv6 address-group  (ban --ip fd00:9::77     -> CROWDSEC-BANNED-V6)
+# (`show firewall group detail`) -> drop (000 / curl timeout) -> unban -> member gone
+# -> recovery (200). All map to the single remote-group CROWDSEC-BANNED
+# (its IPv4/IPv6 sets hold addresses and CIDRs alike):
+#   1. IPv4 address  (ban --ip 10.9.0.77      -> CROWDSEC-BANNED)
+#   2. IPv4 CIDR     (ban --range 10.9.0.0/24 -> CROWDSEC-BANNED)
+#   3. IPv6 address  (ban --ip fd00:9::77     -> CROWDSEC-BANNED)
 #
 # The server netns (10.9.1.10 / fd00:9:1::10) is a separate routed subnet
 # behind VyOS, so every request transits the FORWARD hook -- the input rules
@@ -30,13 +31,13 @@ log "guest IP: $(guest_ip)  routed server: $SERVER_IP / $SERVER_IP6"
 
 member_present() {
     local out
-    out="$(guest_op "show firewall group")"
+    out="$(guest_op "show firewall group detail")"
     [[ "$out" == *"$1"* ]]
 }
 
 member_under() {
     local out
-    out="$(guest_op "show firewall group")"
+    out="$(guest_op "show firewall group detail")"
     [[ "$out" == *"$1"* && "$out" == *"$2"* ]]
 }
 
@@ -101,12 +102,12 @@ scenario() {
     fi
 }
 
-scenario "IPv4 address-group forward (rule 100)" \
+scenario "IPv4 address forward (remote-group)" \
     "--ip $ATTACKER_IP" "$ATTACKER_IP" "CROWDSEC-BANNED" attacker_http_code_fwd || true
-scenario "IPv4 network-group forward (rule 101)" \
-    "--range $ATTACKER_NET" "$ATTACKER_NET" "CROWDSEC-BANNED-NET" attacker_http_code_fwd || true
-scenario "IPv6 address-group forward (rule 100)" \
-    "--ip $ATTACKER_IP6" "$ATTACKER_IP6" "CROWDSEC-BANNED-V6" attacker_http_code_fwd_v6 || true
+scenario "IPv4 CIDR forward (remote-group)" \
+    "--range $ATTACKER_NET" "$ATTACKER_NET" "CROWDSEC-BANNED" attacker_http_code_fwd || true
+scenario "IPv6 address forward (remote-group)" \
+    "--ip $ATTACKER_IP6" "$ATTACKER_IP6" "CROWDSEC-BANNED" attacker_http_code_fwd_v6 || true
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

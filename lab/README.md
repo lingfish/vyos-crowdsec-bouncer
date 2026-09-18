@@ -12,9 +12,9 @@ its LAN.
   the guest reaches the host (`192.0.2.1`) and nothing else — no LAN, no
   internet in-guest. All addressing in this repo is TEST-NET or the in-guest
   `10.9.0.0/24` attacker network.
-- Configures the guest exactly like production (`vyos-config.md`): HTTPS API on
-  loopback, firewall groups + input/forward drop rules, and `set container
-  cs-bouncer`.
+- Configures the guest exactly like production (`vyos-config.md`): firewall
+  `remote-group` + `resolver-interval`, input/forward drop rules referencing it,
+  and `set container cs-bouncer`.
 - Deploys the bouncer image (`podman save` → served over HTTP on the isolated
   net → `podman load` in the guest) and a host-side `crowdsecurity/crowdsec`
   LAPI, registers the bouncer, and stages two in-guest netns with HTTP
@@ -51,8 +51,8 @@ with the user in the `libvirt` group, `/dev/kvm`), `podman`, `curl`, and
 | `lib.sh` | Shared helpers: `guest_ip`, `guest_op` (op commands via serial), `guest_root` (raw root commands via serial), `attacker_http_code`, `wait_for`. |
 | `provision.sh` | Full bring-up (7 phases, idempotent; see comments in-file). |
 | `test-expiry.sh` | Issue-3 scenario: add `-d 1m` ban → member appears + traffic drops → **no manual delete** → auto-removal on expiry → traffic recovers. |
-| `test-ipv6.sh` | Issue-1 scenario: ban `fd00:9::77` → member in `CROWDSEC-BANNED-V6` (`show firewall group`) + IPv6 drop → unban → traffic recovers. |
-| `test-forward.sh` | Issue-2 scenario: ban attacker IP / CIDR / IPv6 → member in `CROWDSEC-BANNED(-NET/-V6)` + **forwarded** traffic to the routed server netns drops → unban → recovers. |
+| `test-ipv6.sh` | Issue-1 scenario: ban `fd00:9::77` → member in `CROWDSEC-BANNED` (`show firewall group`) + IPv6 drop → unban → traffic recovers. |
+| `test-forward.sh` | Issue-2 scenario: ban attacker IP / CIDR / IPv6 → member in `CROWDSEC-BANNED` + **forwarded** traffic to the routed server netns drops → unban → recovers. |
 | `down.sh` | Teardown: `virsh destroy`+`undefine` domain & network, remove LAPI container, purge runtime cache (ISO kept). |
 
 ## Notes / gotchas learned

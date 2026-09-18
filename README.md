@@ -1,65 +1,75 @@
 # VyOS CrowdSec Bouncer
 
 A CrowdSec remediation component that runs as a **VyOS container** and enforces LAPI decisions
-by adding/removing IPs in VyOS firewall address-groups via the **VyOS HTTPS API**.
+by feeding a **firewall remote-group** that VyOS polls and applies as nftables set members.
 
 The CrowdSec Security Engine (agent + LAPI) is expected to run **centrally** — this project only
-ships the bouncer. The only custom code is `vyos-bouncer.sh`; everything else is stock CrowdSec.
+ships the bouncer. The only custom code is `vyos-bouncer.sh`; the container image is a minimal
+Alpine + busybox `httpd` that mirrors LAPI's active decisions.
 
 ```
 Central CrowdSec LAPI (external)
-        │  decisions stream (api_key)
+        ▲  GET /v1/decisions?scope=Ip|Range (X-Api-Key)
+        │
+VyOS container: minimal Alpine, busybox httpd on 127.0.0.1:8080
+        │  serves /bans.txt (newline-delimited Ip/CIDR list, refreshed every 5s)
         ▼
-VyOS container: crowdsecurity/custom-bouncer  (official image)
-        │  invokes vyos-bouncer.sh
+vyos-domain-resolver (VyOS): polls the remote-group URL (resolver-interval 10)
+        │  updates R_CROWDSEC-BANNED / R6_CROWDSEC-BANNED nft sets in place — NO commit
         ▼
-VyOS HTTPS API (service https api rest, loopback-only, API key)
-        │  set/delete firewall group members + commit
-        ▼
-VyOS firewall address-groups → nftables (vyos_filter) → input + forward hooks
+VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input + forward)
 ```
 
 ## Why this design
 
-- **Config-native**: bans are ordinary VyOS firewall group members, visible via
-  `show firewall group` — no direct nftables manipulation, nothing that fights VyOS commits.
-- **Stock where it counts**: the official `crowdsecurity/custom-bouncer` handles LAPI streaming,
-  filtering, retries, and Prometheus metrics. We only write a translator script.
-- **Both traffic directions**: drop rules reference the groups in both the `input` and `forward`
-  rule sets, so VyOS itself (SSH/admin) and services behind it are protected.
+- **No config commits for bans.** VyOS's `remote-group` mechanism re-renders only the affected
+  nftables sets (`R_*` / `R6_*`) on a timer — adding or removing a decision never triggers a
+  VyOS `commit`. This is the whole point: per-decision commits (the previous design's approach)
+  churned the whole firewall config on every ban.
+- **Pull-based, so expiry is free.** `GET /v1/decisions` only returns *active* decisions, so a
+  decision that expires or is deleted simply disappears from the next served list — no del
+  events, no TTL bookkeeping, no missed-delete accumulation.
+- **Fail-open.** If LAPI is unreachable, the container keeps serving its last-good list and VyOS
+  keeps its cached copy, so existing bans persist and nothing is silently unlocked. If the
+  container starts during a LAPI outage it refuses to serve until it has a fresh list, so it
+  can never present an empty list that would clear all bans.
+- **Stock where it counts**: LAPI streaming, filtering and the remote-group refresh are all
+  stock CrowdSec / VyOS. We only write a fetch-and-serve script.
+- **No privileged access**: no `net-admin`, no direct nftables manipulation, no VyOS HTTPS API
+  or API key.
 
-### Known trade-off
+### Trade-offs
 
-Each batch of changes triggers a VyOS config commit (the firewall is regenerated from config).
-`vyos-bouncer.sh` **coalesces** decisions into a single API call per short window to bound commit
-frequency. If commit latency becomes a problem under heavy ban churn, see [`docs/alternatives.md`](docs/alternatives.md).
+- **Latency**: a ban takes up to one `resolver-interval` to apply (~10s with the recommended
+  `resolver-interval 10`). The container refreshes its list every 5s, so the total is ~5–15s.
+  Use the per-group `interval` (min 60s) if you don't want the global resolver-interval at 10s.
+- **No Prometheus metrics** from the stock bouncer (dropped with the custom-bouncer image).
 
 ## Components
 
 | File | Purpose |
 |------|---------|
-| `bouncer.yaml` | `crowdsec-custom-bouncer` config (env-var based) |
-| `vyos-bouncer.sh` | decision → VyOS HTTPS API translator (the only custom code) |
-| `vyos-bouncer.conf` | API URL/key, group names, batching window (mounted, `0600`) |
-| `Dockerfile` | `FROM crowdsecurity/custom-bouncer:v0.0.19` + curl + script/config |
+| `vyos-bouncer.sh` | fetch active LAPI decisions, write the list atomically (`refresh` / `--check`) |
+| `entrypoint.sh` | gate httpd on first successful refresh, run the refresh loop, serve |
+| `vyos-bouncer.conf` | LAPI URL/key, scopes, refresh cadence, HTTP bind (mounted, `0600`) |
+| `Dockerfile` | Alpine + `curl`/`bash`/`jq`/`busybox-extras`, loopback `httpd` PID1 |
 | [`vyos-config.md`](vyos-config.md) | copy-paste VyOS configuration |
-| `test/` | mock VyOS API + integration test harness |
+| `test/` | mock LAPI + integration test harness |
 | `lab/` | reproducible isolated VyOS + LAPI lab (`make lab-up` / `lab-test-expiry` / `lab-down`) |
-| [`docs/lab-validation.md`](docs/lab-validation.md) | end-to-end results against a real VyOS + LAPI |
+| [`docs/lab-validation.md`](docs/lab-validation.md) | end-to-end results against a real VyOS + LAPI (pre-remote-group) |
 
 ## Validation
 
-Validated end-to-end on a live VyOS rolling (QEMU) with a real LAPI: ban → packet drop,
-unban → recovery, IPv4 + IPv6 address groups, CIDR groups, startup re-sync after a cold
-restart, and short-TTL decision auto-expiry (no manual delete). See
-[`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for a reproducible harness
-(`make lab`).
+See [`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for the reproducible
+harness (`make lab`). **Note:** the recorded validation predates the remote-group redesign;
+the lab tests are being re-validated against the new architecture (ban → drop, unban →
+recovery, short-TTL auto-expiry, IPv6, forward path).
 
 ## CI / published image
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push and PR:
 
-- `make test` + `make dry-run` (mock VyOS API, no VyOS/container needed).
+- `make test` + `make check` (mock LAPI, no VyOS/container needed).
 - Builds the image on every run and, on a `v*` tag, publishes it to
   [`ghcr.io/lingfish/vyos-crowdsec-bouncer`](https://github.com/lingfish/vyos-crowdsec-bouncer/pkgs).
 
@@ -82,8 +92,8 @@ registry (requires a `podman login` to GHCR first).
    cscli bouncers add vyos-bouncer -o raw
    ```
 
-2. **Configure VyOS** per [`vyos-config.md`](vyos-config.md): HTTPS API (loopback + key), firewall groups and
-   drop rules, and the container definition.
+2. **Configure VyOS** per [`vyos-config.md`](vyos-config.md): the remote-group + `resolver-interval`,
+   the drop rules referencing it, and the container definition.
 
 3. **Get the image** — either pull the published build or build locally:
 
@@ -102,42 +112,38 @@ registry (requires a `podman login` to GHCR first).
 4. **Test locally** (no VyOS needed):
 
    ```bash
-   make test        # runs vyos-bouncer.sh against a mock VyOS API
-   make dry-run     # shows what would be sent, without an API
+   make test   # runs vyos-bouncer.sh against a mock LAPI
+   make check  # prints the list the bouncer would serve
    ```
 
 ## Bouncer behavior (`vyos-bouncer.sh`)
 
-Invoked by `crowdsec-custom-bouncer` as:
-
-```
-vyos-bouncer.sh <add|del> <value> <duration> <reason> <json>
-```
-
-- `value` may be an IPv4/IPv6 address or a CIDR.
-- Mapping: IPv4 → `address-group`; IPv6 → `ipv6-address-group`; CIDR → `network-group`
-  (IPv4/IPv6 variants). Group names come from `vyos-bouncer.conf`.
-- Each invocation spools its op and participates in a `flock`-protected **batch flusher**: it
-  waits a short quiet window, collects all pending ops, and sends them as one
-  `POST /configure` with a command list → one VyOS commit per window.
-- **Fail-open**: if the VyOS API is unreachable it logs and retries; existing group members are
-  left untouched. Never adds rules; only members.
-- `--dry-run` / `-n`: log the intended API call and exit without POSTing.
+- `vyos-bouncer.sh refresh` — fetch `scope=Ip` and `scope=Range` decisions from LAPI
+  (`GET /v1/decisions`, `X-Api-Key`), skip simulated ones, dedupe/sort, write
+  `BANS_FILE` atomically. Only writes on a fully successful fetch; on failure the existing
+  list is left untouched and the script exits non-zero.
+- `vyos-bouncer.sh --check` — same fetch, prints the list to stdout without writing.
+- `entrypoint.sh` — refuses to serve until the first successful refresh, then runs the refresh
+  loop every `REFRESH_SECONDS` (5) and `exec`s busybox `httpd -f -p 127.0.0.1:8080 -h /www`.
+- Values are sourced from `vyos-bouncer.conf`; every value yields to an already-set env var
+  (`VYOS_BOUNCER_CONF` overrides the config path).
 
 ## Security
 
-- The VyOS API key has **full permissions** — bind the HTTPS API to loopback only and run the
-  bouncer container with `allow-host-networks` (so it reaches `127.0.0.1`).
-- Store `VYOS_API_KEY` in a `0600` file under `/config` and mount it; keep `bouncer.yaml`'s LAPI
-  key in the VyOS container env.
-- The bouncer never `save`s the config, so runtime bans are ephemeral by design.
+- The container holds the **LAPI key** in a `0600` conf mounted from `/config`. Keep the LAPI
+  key scoped to this bouncer.
+- busybox `httpd` binds **loopback only** (`127.0.0.1:8080`), and the container uses
+  `allow-host-networks`, so the served list is only reachable by VyOS itself — it is not
+  exposed on the WAN.
+- The container needs **no capabilities** and never touches nftables or the VyOS config.
 
 ## Ops / troubleshooting
 
-- Bouncer + script logs: `show log container cs-bouncer` (or podman logs).
-- Inspect current bans: `run show firewall group`.
-- Force-remove a ban: `delete firewall group address-group CROWDSEC-BANNED address <ip>` + `commit`.
-- bouncer health: `curl 127.0.0.1:60602/metrics` (Prometheus) from the host network.
+- Bouncer + refresh logs: `show log container cs-bouncer` (or podman logs).
+- Inspect current bans: `run show firewall group` (look at the `CROWDSEC-BANNED` remote group).
+- Inspect the served list: `curl http://127.0.0.1:8080/bans.txt`.
+- Manual list: `podman exec cs-bouncer vyos-bouncer.sh --check`.
+- Force a refresh early: `restart vyos-domain-resolver` (VyOS host) — also re-applies the group.
 
 ## License
 

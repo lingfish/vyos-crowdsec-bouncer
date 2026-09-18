@@ -1,19 +1,19 @@
 #!/bin/bash
-# Test vyos-bouncer.sh against a mock VyOS API.
+# Test vyos-bouncer.sh against a mock CrowdSec LAPI.
 #
 #   ./test/test-vyos-bouncer.sh          # full integration test
-#   ./test/test-vyos-bouncer.sh --dry-run # only exercise --dry-run mode
+#   ./test/test-vyos-bouncer.sh --check  # only exercise --check mode
 set -euo pipefail
 
-DRY_ONLY="${1:-}"
+CHECK_ONLY="${1:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT/vyos-bouncer.sh"
-MOCK="$ROOT/test/mock-vyos-api.py"
+MOCK="$ROOT/test/mock-lapi.py"
 TMP="$(mktemp -d "$ROOT/test/tmp.XXXXXX")"
-PORT="18443"
-MOCK_LOG="$TMP/mock.log"
+PORT="18444"
 CONF="$TMP/bouncer.conf"
+BANS="$TMP/bans.txt"
 PASS=0
 FAIL=0
 
@@ -27,111 +27,101 @@ ok()   { echo "  ok: $1"; PASS=$((PASS + 1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 write_conf() {
+    # Mirror the real vyos-bouncer.conf: values only apply when not set in env,
+    # so env-var overrides (e.g. SCOPES=Username) genuinely win.
     cat >"$CONF" <<EOF
-VYOS_API_URL="http://127.0.0.1:$PORT"
-VYOS_API_KEY="test-key-123"
-ADDRESS_GROUP_V4="CROWDSEC-BANNED"
-ADDRESS_GROUP_V6="CROWDSEC-BANNED-V6"
-NETWORK_GROUP_V4="CROWDSEC-BANNED-NET"
-NETWORK_GROUP_V6="CROWDSEC-BANNED-NET-V6"
-BATCH_WINDOW="1"
-BATCH_MAX_ROUNDS="2"
-API_RETRIES="1"
-SPOOL_DIR="$TMP/spool"
+[ -z "\${LAPI_URL:-}" ] && LAPI_URL="http://127.0.0.1:$PORT"
+[ -z "\${API_KEY:-}" ] && API_KEY="test-key-123"
+[ -z "\${SCOPES:-}" ] && SCOPES="Ip,Range"
+[ -z "\${SKIP_SIMULATED:-}" ] && SKIP_SIMULATED="true"
+[ -z "\${BANS_FILE:-}" ] && BANS_FILE="$BANS"
+[ -z "\${REFRESH_SECONDS:-}" ] && REFRESH_SECONDS="5"
+[ -z "\${HTTP_BIND:-}" ] && HTTP_BIND="127.0.0.1"
+[ -z "\${HTTP_PORT:-}" ] && HTTP_PORT="8080"
 EOF
 }
 
 start_mock() {
-    MOCK_PORT="$PORT" MOCK_LOG="$MOCK_LOG" python3 "$MOCK" &
+    MOCK_LAPI_PORT="$PORT" "$MOCK" &
     MOCK_PID=$!
     sleep 1
 }
 
-wait_for_flush() {
-    local deadline=$((SECONDS + 10))
-    while [[ $SECONDS -lt $deadline ]]; do
-        if [[ -f "$MOCK_LOG" ]] && grep -q 'configure' "$MOCK_LOG"; then
-            sleep 2  # allow a second batched flush to land too
-            return 0
-        fi
-        sleep 1
-    done
-    return 1
-}
-
 echo "== mock run =="
-LOG="$MOCK_LOG"
 write_conf
 start_mock
-
 export VYOS_BOUNCER_CONF="$CONF"
 
-if [[ "$DRY_ONLY" != "--dry-run" ]]; then
+if [[ "$CHECK_ONLY" != "--check" ]]; then
 
-"$SCRIPT" add 203.0.113.7 3600 ssh-bruteforce '{}'
-"$SCRIPT" del 203.0.113.8 0 expired '{}'
-"$SCRIPT" add 2001:db8::1 3600 ssh-bruteforce '{}'
-"$SCRIPT" add 198.51.100.0/24 3600 portscan '{}'
-"$SCRIPT" add 2001:db8:abcd::/48 3600 portscan '{}'
-
-if ! wait_for_flush; then
-    bad "no API calls received by mock"
-    exit 1
-fi
+"$SCRIPT" refresh
 
 echo "== assertions =="
-RAW="$TMP/raw.data"
 
-# Decode each request's data field (mock JSON-escapes inner quotes) into raw lines.
-python3 - "$LOG" >"$RAW" <<'EOF'
-import json, sys
-for line in open(sys.argv[1], encoding="utf-8"):
-    entry = json.loads(line)
-    if entry.get("data"):
-        print(entry["data"])
-EOF
+[[ -f "$BANS" ]] && ok "refresh wrote list file" || bad "refresh wrote list file"
 
-# IPv4 ban -> address-group set
-grep -q '"op":"set".*"address-group","CROWDSEC-BANNED","address","203.0.113.7"' "$RAW" \
-    && ok "IPv4 ban -> address-group set" || bad "IPv4 ban -> address-group set"
+# IPv4 bans
+grep -q '^203.0.113.7$' "$BANS" && ok "IPv4 ban present" || bad "IPv4 ban present"
+grep -q '^203.0.113.8$' "$BANS" && ok "second IPv4 ban present" || bad "second IPv4 ban present"
 
-# IPv4 unban -> delete
-grep -q '"op":"delete".*"address-group","CROWDSEC-BANNED","address","203.0.113.8"' "$RAW" \
-    && ok "IPv4 unban -> address-group delete" || bad "IPv4 unban -> address-group delete"
+# IPv6 ban
+grep -q '^2001:db8::1$' "$BANS" && ok "IPv6 ban present" || bad "IPv6 ban present"
 
-# IPv6 single -> ipv6-address-group
-grep -q '"op":"set".*"ipv6-address-group","CROWDSEC-BANNED-V6","address","2001:db8::1"' "$RAW" \
-    && ok "IPv6 ban -> ipv6-address-group set" || bad "IPv6 ban -> ipv6-address-group set"
+# CIDRs (Range scope)
+grep -q '^198.51.100.0/24$' "$BANS" && ok "IPv4 CIDR present" || bad "IPv4 CIDR present"
+grep -q '^2001:db8:abcd::/48$' "$BANS" && ok "IPv6 CIDR present" || bad "IPv6 CIDR present"
 
-# IPv4 CIDR -> network-group
-grep -q '"op":"set".*"network-group","CROWDSEC-BANNED-NET","network","198.51.100.0/24"' "$RAW" \
-    && ok "IPv4 CIDR -> network-group set" || bad "IPv4 CIDR -> network-group set"
+# simulated decisions are not enforced
+grep -q '^192.0.2.66$' "$BANS" && bad "simulated decision excluded" || ok "simulated decision excluded"
 
-# IPv6 CIDR -> ipv6-network-group
-grep -q '"op":"set".*"ipv6-network-group","CROWDSEC-BANNED-NET-V6","network","2001:db8:abcd::/48"' "$RAW" \
-    && ok "IPv6 CIDR -> ipv6-network-group set" || bad "IPv6 CIDR -> ipv6-network-group set"
+# one line per entry, sorted
+[[ "$(wc -l <"$BANS")" -eq 5 ]] \
+    && ok "5 unique entries (deduped)" || bad "expected 5 unique entries, got $(wc -l <"$BANS")"
+sort -c "$BANS" 2>/dev/null && ok "list is sorted" || bad "list is sorted"
 
-# auth key present on every request, correct value
-[[ "$(grep -c '"key": null' "$LOG")" -eq 0 ]] \
-    && ok "API key sent on every request" || bad "API key sent on every request"
-grep -q '"key": "test-key-123"' "$LOG" \
-    && ok "API key value correct" || bad "API key value correct"
+# idempotent refresh
+"$SCRIPT" refresh
+[[ "$(wc -l <"$BANS")" -eq 5 ]] && ok "repeated refresh stays stable" || bad "repeated refresh stays stable"
 
-# batching: >= 5 ops but <= 5 requests (ops coalesced)
-REQS=$(wc -l <"$LOG")
-[[ "$REQS" -le 5 ]] \
-    && ok "batching (5 ops -> $REQS requests)" || bad "batching (5 ops -> $REQS requests)"
+# LAPI returns `null` (not `[]`) for a scope with no decisions -> refresh must
+# still succeed and write an empty list
+SCOPES="Username" "$SCRIPT" refresh
+[[ -f "$BANS" && ! -s "$BANS" ]] && ok "empty LAPI scope handled (null body)" || bad "empty LAPI scope handled"
+"$SCRIPT" refresh   # restore the full list for the failure-mode test below
+
+# failure mode: LAPI outage -> refresh fails, existing list untouched
+kill "$MOCK_PID" 2>/dev/null || true
+wait "$MOCK_PID" 2>/dev/null || true
+cp "$BANS" "$TMP/before.txt"
+MOCK_LAPI_PORT="$PORT" MOCK_FAIL=1 "$MOCK" &
+MOCK_PID=$!
+sleep 1
+if "$SCRIPT" refresh >/dev/null 2>&1; then
+    bad "refresh must fail when LAPI is down"
+else
+    ok "refresh fails when LAPI is down"
+fi
+cmp -s "$TMP/before.txt" "$BANS" && ok "last-good list untouched on failure" || bad "last-good list untouched on failure"
 
 fi  # end mock integration section
 
-echo "== dry-run mode =="
-"$SCRIPT" --dry-run add 192.0.2.55 60 test '{}' 2>&1 | grep -q "DRY-RUN: would POST" \
-    && ok "dry-run logs without POSTing" || bad "dry-run logs without POSTing"
-BEFORE=0; [[ -f "$LOG" ]] && BEFORE=$(wc -l <"$LOG")
-"$SCRIPT" -n del 192.0.2.55 0 test '{}'
-AFTER=0; [[ -f "$LOG" ]] && AFTER=$(wc -l <"$LOG")
-[[ "$AFTER" -eq "$BEFORE" ]] \
-    && ok "dry-run (-n) made no API calls" || bad "dry-run (-n) made no API calls"
+echo "== check mode =="
+if [[ -n "${MOCK_PID:-}" ]]; then
+    kill "$MOCK_PID" 2>/dev/null || true
+    wait "$MOCK_PID" 2>/dev/null || true
+fi
+start_mock
+"$SCRIPT" --check >"$TMP/check.out"
+grep -q '^203.0.113.7$' "$TMP/check.out" && ok "--check prints the list" || bad "--check prints the list"
+if [[ -f "$BANS" ]]; then
+    BEFORE=$(cksum <"$BANS")
+    "$SCRIPT" --check >/dev/null
+    AFTER=$(cksum <"$BANS")
+    [[ "$BEFORE" == "$AFTER" ]] && ok "--check leaves served file untouched" || bad "--check leaves served file untouched"
+else
+    "$SCRIPT" --check >/dev/null
+    [[ -f "$BANS" ]] && bad "--check must not create the served file" || ok "--check does not create the served file"
+fi
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

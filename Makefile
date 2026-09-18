@@ -3,7 +3,7 @@ REGISTRY  ?= ghcr.io/lingfish
 VERSION   ?= $(shell git describe --tags --always 2>/dev/null || echo latest)
 ENGINE    ?= podman
 
-.PHONY: build test dry-run push clean lab-up lab-test-expiry lab-test-ipv6 lab-test-forward lab-down lab
+.PHONY: build test check push clean lab-up lab-test-expiry lab-test-ipv6 lab-test-forward lab-down lab
 
 build:
 	$(ENGINE) build -t $(IMAGE):$(VERSION) .
@@ -11,8 +11,8 @@ build:
 test:
 	./test/test-vyos-bouncer.sh
 
-dry-run:
-	./test/test-vyos-bouncer.sh --dry-run
+check:
+	./test/test-vyos-bouncer.sh --check
 
 push: build
 	$(ENGINE) push $(REGISTRY)/$(IMAGE):$(VERSION)

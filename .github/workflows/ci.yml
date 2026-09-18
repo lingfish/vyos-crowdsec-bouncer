@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Integration test (mock VyOS API)
+      - name: Integration test (mock LAPI)
         run: make test
-      - name: Dry-run mode
-        run: make dry-run
+      - name: Check mode
+        run: make check
 
   build:
     needs: test
