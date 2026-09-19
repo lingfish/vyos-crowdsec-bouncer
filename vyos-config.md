@@ -1,9 +1,8 @@
 # VyOS configuration for the CrowdSec bouncer
 
-Targets VyOS **1.5 (circinus) rolling** (firewall `remote-group`). No VyOS HTTPS API is
-involved: the bouncer container only serves a ban list over loopback HTTP and VyOS's
-`vyos-domain-resolver` polls it and updates nftables sets **in place (no config commit per
-ban)**.
+This uses the VyOS [remote-group](https://docs.vyos.io/en/1.5/configuration/firewall/groups.html#remote-groups) feature.
+No VyOS HTTPS API is involved: the bouncer container only serves a ban list over loopback HTTP and VyOS's
+`vyos-domain-resolver` polls it and updates nftables sets in place (no config commit per ban).
 
 All commands run from config mode (`configure`) and are committed once at the end.
 `add container image` is the exception: it runs in **op-mode** (before entering `configure`).
@@ -29,91 +28,21 @@ set firewall global-options resolver-interval '10'
 
 ## 2. Firewall policy
 
-The design is **fail-open**: only CrowdSec-banned sources are dropped, everything else passes.
-For base chains (the `filter` rule sets below) VyOS's implicit default-action is already
-`accept`, but we state it explicitly so the policy is visible.
-
-Use a **low rule number** so the drop is evaluated before any accept/allow rules. One
-remote-group name works for both families: VyOS renders `@R_CROWDSEC-BANNED` in IPv4 rules and
-`@R6_CROWDSEC-BANNED` in IPv6 rules.
-
-### 2a. Drop rules (router-local + forwarded traffic)
-
-Protect VyOS itself (input):
+The design is **fail-open**: bans apply only where *you* reference the group. The single
+requirement is a `drop` rule with `source group remote-group 'CROWDSEC-BANNED'` on each path
+you want protected — VyOS keeps `ipv4`/`ipv6` and `input`/`forward` as separate rule trees,
+and the same group works inside named rule-sets of a zone-based firewall. Give it a **low
+rule number** so it evaluates before any accept/allow rules. One remote-group name covers
+both families: VyOS renders `@R_CROWDSEC-BANNED` in IPv4 rules and `@R6_CROWDSEC-BANNED`
+in IPv6 rules.
 
 ```bash
-set firewall ipv4 input filter default-action 'accept'
 set firewall ipv4 input filter rule 100 action 'drop'
 set firewall ipv4 input filter rule 100 source group remote-group 'CROWDSEC-BANNED'
-
-set firewall ipv6 input filter default-action 'accept'
-set firewall ipv6 input filter rule 100 action 'drop'
-set firewall ipv6 input filter rule 100 source group remote-group 'CROWDSEC-BANNED'
 ```
 
-Protect services behind VyOS (forward):
-
-```bash
-set firewall ipv4 forward filter default-action 'accept'
-set firewall ipv4 forward filter rule 100 action 'drop'
-set firewall ipv4 forward filter rule 100 source group remote-group 'CROWDSEC-BANNED'
-
-set firewall ipv6 forward filter default-action 'accept'
-set firewall ipv6 forward filter rule 100 action 'drop'
-set firewall ipv6 forward filter rule 100 source group remote-group 'CROWDSEC-BANNED'
-```
-
-### 2b. Zone-based firewall alternative
-
-Zone default-actions may only be `drop` or `reject` — **never `accept`**. So with zones, the
-fail-open policy must live in the **named rule-sets** (`default-action 'accept'`), not in the zone.
-Unmatched zone-pairs fall through to the destination zone's default, so any pair you want to
-allow needs its own rule-set (see the warning below).
-
-Minimal setup for an untrusted `WAN`, a trusted `LAN`, and the router itself (`LOCAL`):
-
-```bash
-set firewall zone WAN interface 'eth0'
-set firewall zone WAN default-action 'drop'
-set firewall zone LAN interface 'eth1'
-set firewall zone LAN default-action 'drop'
-set firewall zone LOCAL local-zone
-set firewall zone LOCAL default-action 'drop'
-```
-
-Protect the router (WAN → LOCAL) and services behind VyOS (WAN → LAN). Rule-set names are
-`SRC-DEST`; the drop rules stay low-numbered:
-
-```bash
-# WAN -> LOCAL (protect VyOS itself)
-set firewall ipv4 name WAN-LOCAL default-action 'accept'
-set firewall ipv4 name WAN-LOCAL rule 100 action 'drop'
-set firewall ipv4 name WAN-LOCAL rule 100 source group remote-group 'CROWDSEC-BANNED'
-set firewall ipv6-name WAN-LOCAL-6 default-action 'accept'
-set firewall ipv6-name WAN-LOCAL-6 rule 100 action 'drop'
-set firewall ipv6-name WAN-LOCAL-6 rule 100 source group remote-group 'CROWDSEC-BANNED'
-
-# WAN -> LAN (protect services behind VyOS)
-set firewall ipv4 name WAN-LAN default-action 'accept'
-set firewall ipv4 name WAN-LAN rule 100 action 'drop'
-set firewall ipv4 name WAN-LAN rule 100 source group remote-group 'CROWDSEC-BANNED'
-set firewall ipv6-name WAN-LAN-6 default-action 'accept'
-set firewall ipv6-name WAN-LAN-6 rule 100 action 'drop'
-set firewall ipv6-name WAN-LAN-6 rule 100 source group remote-group 'CROWDSEC-BANNED'
-
-# Bind rule-sets to zone pairs
-set firewall zone LOCAL from WAN firewall name 'WAN-LOCAL'
-set firewall zone LOCAL from WAN firewall ipv6-name 'WAN-LOCAL-6'
-set firewall zone LAN from WAN firewall name 'WAN-LAN'
-set firewall zone LAN from WAN firewall ipv6-name 'WAN-LAN-6'
-```
-
-> **Warning:** any zone-pair without a rule-set is dropped by the zone default. With the config
-> above that includes `LAN -> LOCAL`, so you would lock yourself out of the router. Add rule-sets
-> for every pair you need, e.g. a `LAN-LOCAL` rule-set with
-> `state established/related` accepts plus your management allow-rules, and bind it with
-> `set firewall zone LOCAL from LAN firewall name 'LAN-LOCAL'`. Rule **ordering** is what
-> matters — keep the CrowdSec drop rules before any accept rules.
+How you structure the rest of your firewall — base chains or zones, default-actions,
+management rules — is your call.
 
 ## 3. Container
 
@@ -208,10 +137,8 @@ The member appears in the remote-group within one `resolver-interval` (~10s), as
 
 ```bash
 delete container name cs-bouncer
-delete firewall ipv4 input filter rule 100
-delete firewall ipv6 input filter rule 100
-delete firewall ipv4 forward filter rule 100
-delete firewall ipv6 forward filter rule 100
 delete firewall group remote-group CROWDSEC-BANNED
 delete firewall global-options resolver-interval
 ```
+
+Plus any firewall rules of your own that reference `CROWDSEC-BANNED`.
