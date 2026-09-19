@@ -51,19 +51,18 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 |------|---------|
 | `vyos-bouncer.sh` | fetch active LAPI decisions, write the list atomically (`refresh` / `--check`) |
 | `entrypoint.sh` | gate httpd on first successful refresh, run the refresh loop, serve |
-| `vyos-bouncer.conf` | LAPI URL/key, scopes, refresh cadence, HTTP bind (mounted, `0600`) |
+| `vyos-bouncer.conf` | LAPI URL/key, scopes, origin filter, refresh cadence, HTTP bind (mounted, `0600`) |
 | `Dockerfile` | Alpine + `curl`/`bash`/`jq`/`busybox-extras`, loopback `httpd` PID1 |
 | [`vyos-config.md`](vyos-config.md) | copy-paste VyOS configuration |
 | `test/` | mock LAPI + integration test harness |
-| `lab/` | reproducible isolated VyOS + LAPI lab (`make lab-up` / `lab-test-expiry` / `lab-down`) |
-| [`docs/lab-validation.md`](docs/lab-validation.md) | end-to-end results against a real VyOS + LAPI (pre-remote-group) |
+| `lab/` | reproducible isolated VyOS + LAPI lab (`make lab-up` / `lab-test-expiry` / `lab-test-ipv6` / `lab-test-forward` / `lab-down`) |
+| [`docs/lab-validation.md`](docs/lab-validation.md) | end-to-end results against a real VyOS + LAPI (remote-group design, all scenarios green) |
 
 ## Validation
 
 See [`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for the reproducible
-harness (`make lab`). **Note:** the recorded validation predates the remote-group redesign;
-the lab tests are being re-validated against the new architecture (ban → drop, unban →
-recovery, short-TTL auto-expiry, IPv6, forward path).
+harness (`make lab`). Validated green against the remote-group design on VyOS rolling
+`2026.09.17-0028`: short-TTL auto-expiry, IPv6 ban/unban, and forward-path drops all pass.
 
 ## CI / published image
 
@@ -121,7 +120,9 @@ registry (requires a `podman login` to GHCR first).
 - `vyos-bouncer.sh refresh` — fetch `scope=Ip` and `scope=Range` decisions from LAPI
   (`GET /v1/decisions`, `X-Api-Key`), skip simulated ones, dedupe/sort, write
   `BANS_FILE` atomically. Only writes on a fully successful fetch; on failure the existing
-  list is left untouched and the script exits non-zero.
+  list is left untouched and the script exits non-zero. Set `ORIGINS` (comma-separated,
+  e.g. `crowdsec,cscli`) to have LAPI filter decisions by origin server-side — empty means
+  all origins, including the CAPI community blocklist.
 - `vyos-bouncer.sh --check` — same fetch, prints the list to stdout without writing.
 - `entrypoint.sh` — refuses to serve until the first successful refresh, then runs the refresh
   loop every `REFRESH_SECONDS` (5) and `exec`s busybox `httpd -f -p 127.0.0.1:8080 -h /www`.

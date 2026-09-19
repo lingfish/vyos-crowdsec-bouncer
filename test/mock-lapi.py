@@ -11,12 +11,12 @@ import urllib.parse
 FAIL = os.environ.get("MOCK_FAIL", "0") == "1"
 
 DECISIONS = [
-    {"scope": "Ip", "value": "203.0.113.7", "simulated": False, "type": "ban"},
-    {"scope": "Ip", "value": "203.0.113.8", "simulated": False, "type": "ban"},
-    {"scope": "Ip", "value": "2001:db8::1", "simulated": False, "type": "ban"},
-    {"scope": "Range", "value": "198.51.100.0/24", "simulated": False, "type": "ban"},
-    {"scope": "Range", "value": "2001:db8:abcd::/48", "simulated": False, "type": "ban"},
-    {"scope": "Ip", "value": "192.0.2.66", "simulated": True, "type": "ban"},
+    {"scope": "Ip", "value": "203.0.113.7", "simulated": False, "type": "ban", "origin": "crowdsec"},
+    {"scope": "Ip", "value": "203.0.113.8", "simulated": False, "type": "ban", "origin": "crowdsec"},
+    {"scope": "Ip", "value": "2001:db8::1", "simulated": False, "type": "ban", "origin": "CAPI"},
+    {"scope": "Range", "value": "198.51.100.0/24", "simulated": False, "type": "ban", "origin": "CAPI"},
+    {"scope": "Range", "value": "2001:db8:abcd::/48", "simulated": False, "type": "ban", "origin": "lists"},
+    {"scope": "Ip", "value": "192.0.2.66", "simulated": True, "type": "ban", "origin": "crowdsec"},
 ]
 
 
@@ -33,6 +33,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         scope = params.get("scope", [None])[0]
         result = DECISIONS if scope is None else [d for d in DECISIONS if d["scope"] == scope]
+        origins = params.get("origins", [None])[0]
+        if origins is not None:
+            wanted = origins.split(",")
+            result = [d for d in result if d["origin"] in wanted]
         # Mirror real LAPI: Go marshals an empty decision slice as JSON `null`.
         body = json.dumps(result if result else None).encode()
         self.send_response(200)

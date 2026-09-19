@@ -37,7 +37,9 @@ There is **no** stock custom-bouncer, no VyOS HTTPS API, and no config commits f
 - `vyos-bouncer.sh refresh` — `GET /v1/decisions?scope=Ip` and `?scope=Range` against `LAPI_URL`
   with `X-Api-Key: $API_KEY` (`curl -k`, fail on HTTP error), `jq` to drop `simulated != true`
   decisions and extract `.value`, `sort -u`, then write `BANS_FILE` **atomically only on
-  success**. On any failure: leave the file untouched, exit non-zero.
+  success**. On any failure: leave the file untouched, exit non-zero. When `ORIGINS` is set
+  (comma-separated), `&origins=<url-encoded>` is appended so LAPI filters by origin
+  server-side (e.g. `crowdsec,cscli` for local-only, excluding the CAPI blocklist).
 - `vyos-bouncer.sh --check` — same fetch, print the list to stdout, never write.
 - Pull-based: LAPI only returns active (non-expired) decisions, so add/del/expiry are implicit.
 - `entrypoint.sh` — retries `refresh` until it succeeds (gate), then loops `refresh` every
@@ -51,7 +53,8 @@ There is **no** stock custom-bouncer, no VyOS HTTPS API, and no config commits f
   path with `VYOS_BOUNCER_CONF`. Every value only applies if **not already set in the
   environment**, so env vars win (`[ -z "${VAR:-}" ] && VAR=...`).
 - Values: `LAPI_URL`, `API_KEY`, `SCOPES` (default `Ip,Range`), `SKIP_SIMULATED` (default
-  `true`), `BANS_FILE` (default `/www/bans.txt`), `REFRESH_SECONDS` (5), `HTTP_BIND`
+  `true`), `ORIGINS` (default empty = all origins; comma-separated local-only filter, see
+  above), `BANS_FILE` (default `/www/bans.txt`), `REFRESH_SECONDS` (5), `HTTP_BIND`
   (`127.0.0.1`), `HTTP_PORT` (8080).
 - `HTTP_BIND` must stay on loopback: the container runs with `allow-host-networks` and VyOS's
   `vyos-domain-resolver` polls the list at `http://127.0.0.1:8080/bans.txt`.
