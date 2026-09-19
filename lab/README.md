@@ -13,8 +13,9 @@ its LAN.
   internet in-guest. All addressing in this repo is TEST-NET or the in-guest
   `10.9.0.0/24` attacker network.
 - Configures the guest exactly like production (`vyos-config.md`): firewall
-  `remote-group` + `resolver-interval`, input/forward drop rules referencing it,
-  and `set container cs-bouncer`.
+  `remote-group` with its own `interval '60s'` (the global `resolver-interval` is
+  left at VyOS's default), input/forward drop rules referencing it, and
+  `set container cs-bouncer`.
 - Deploys the bouncer image (`podman save` → served over HTTP on the isolated
   net → `podman load` in the guest) and a host-side `crowdsecurity/crowdsec`
   LAPI, registers the bouncer, and stages two in-guest netns with HTTP
@@ -50,13 +51,18 @@ with the user in the `libvirt` group, `/dev/kvm`), `podman`, `curl`, and
 | `serial.py` | pexpect driver for the guest serial console: fresh login or leftover-shell detection, `sudo` auto-answer, command/prompt state machine. |
 | `lib.sh` | Shared helpers: `guest_ip`, `guest_op` (op commands via serial), `guest_root` (raw root commands via serial), `attacker_http_code`, `wait_for`. |
 | `provision.sh` | Full bring-up (7 phases, idempotent; see comments in-file). |
-| `test-expiry.sh` | Issue-3 scenario: add `-d 1m` ban → member appears + traffic drops → **no manual delete** → auto-removal on expiry → traffic recovers. |
+| `test-expiry.sh` | Issue-3 scenario: add `-d 3m` ban → member appears + traffic drops → **no manual delete** → auto-removal on expiry → traffic recovers. |
 | `test-ipv6.sh` | Issue-1 scenario: ban `fd00:9::77` → member in `CROWDSEC-BANNED` (`show firewall group`) + IPv6 drop → unban → traffic recovers. |
 | `test-forward.sh` | Issue-2 scenario: ban attacker IP / CIDR / IPv6 → member in `CROWDSEC-BANNED` + **forwarded** traffic to the routed server netns drops → unban → recovers. |
 | `down.sh` | Teardown: `virsh destroy`+`undefine` domain & network, remove LAPI container, purge runtime cache (ISO kept). |
 
 ## Notes / gotchas learned
 
+- **The lab runs the documented production cadence** (`REFRESH_SECONDS=30` in the guest conf +
+  remote-group `interval '60s'`), so each member appearance/removal takes up to ~93s and the
+  scenario tests allow 150s per transition (`wait_for`) and 300s for the expiry loop. Expect a
+  noticeably longer `make lab` than the ~10s-cadence runs recorded in
+  [`docs/lab-validation.md`](../docs/lab-validation.md), which predate this cadence.
 - The domain's pty slave is only readable by `libvirt-qemu`, so the console is
   exposed as a **raw TCP chardev** and driven over a socket, not `virsh console`.
 - **No op-mode command works over non-interactive SSH** on this VyOS build

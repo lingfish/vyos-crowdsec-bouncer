@@ -12,9 +12,9 @@ Central CrowdSec LAPI (external)
         ▲  GET /v1/decisions?scope=Ip|Range (X-Api-Key)
         │
 VyOS container: minimal Alpine, busybox httpd on 127.0.0.1:8080
-        │  serves /bans.txt (newline-delimited Ip/CIDR list, refreshed every 5s)
+        │  serves /bans.txt (newline-delimited Ip/CIDR list, refreshed every 30s)
         ▼
-vyos-domain-resolver (VyOS): polls the remote-group URL (resolver-interval 10)
+vyos-domain-resolver (VyOS): polls the remote-group URL (group interval 60s)
         │  updates R_CROWDSEC-BANNED / R6_CROWDSEC-BANNED nft sets in place — NO commit
         ▼
 VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input + forward)
@@ -39,8 +39,8 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
    cscli decisions add --ip 203.0.113.7 -d 10m
    ```
 
-   It appears in `show firewall group` within one `resolver-interval` (~10s) and disappears
-   on its own at expiry. More checks in [`vyos-config.md`](vyos-config.md).
+   It appears in `show firewall group` within one group `interval` (~60s; worst ~90s) and
+   disappears on its own at expiry. More checks in [`vyos-config.md`](vyos-config.md).
 
 ## Why this design
 
@@ -62,9 +62,22 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 
 ### Trade-offs
 
-- **Latency**: a ban takes up to one `resolver-interval` to apply (~10s with the recommended
-  `resolver-interval 10`). The container refreshes its list every 5s, so the total is ~5–15s.
-  Use the per-group `interval` (min 60s) if you don't want the global resolver-interval at 10s.
+- **Latency**: with the recommended cadence a ban — and its expiry/unban — lands in **~45s typical,
+  ~90s worst case**. Three serial knobs govern it (LAPI → container file → VyOS nftables set), so
+  their delays add:
+
+  | Knob | Set where | Default | Controls |
+  |------|-----------|---------|----------|
+  | `REFRESH_SECONDS` | bouncer container | `30` s | how often the list is re-pulled from LAPI and `bans.txt` rewritten |
+  | remote-group `interval` | VyOS, per group | unset → global; min `60` s | how often VyOS re-fetches this group's URL |
+  | `resolver-interval` | VyOS, global | `300` s | fallback poll for every remote-group, and FQDN/`domain-group` resolution rate |
+
+  That delay is comfortably good enough for remediation: a decision is minted seconds after the
+  offending burst, and scanners and brute-force runs last minutes, so 15s vs 90s is not observable.
+  (And with the usual `state-policy established accept`, a ban blocks *new* connections only — it
+  never interrupted in-flight traffic at 15s either.) Sub-minute enforcement requires lowering the
+  **global** `resolver-interval` (min 10s), which also re-resolves every FQDN/domain group at that
+  rate — see [`vyos-config.md`](vyos-config.md#1-firewall-remote-group--poll-cadence).
 - **No Prometheus metrics** from the stock bouncer (dropped with the custom-bouncer image).
 
 ## Components
@@ -90,7 +103,7 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
   all origins, including the CAPI community blocklist.
 - `vyos-bouncer.sh --check` — same fetch, prints the list to stdout without writing.
 - `entrypoint.sh` — refuses to serve until the first successful refresh, then runs the refresh
-  loop every `REFRESH_SECONDS` (5) and `exec`s busybox `httpd -f -p 127.0.0.1:8080 -h /www`.
+  loop every `REFRESH_SECONDS` (30) and `exec`s busybox `httpd -f -p 127.0.0.1:8080 -h /www`.
 - Values are sourced from `vyos-bouncer.conf`; every value yields to an already-set env var
   (`VYOS_BOUNCER_CONF` overrides the config path).
 
@@ -109,7 +122,8 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 - Inspect current bans: `run show firewall group` (look at the `CROWDSEC-BANNED` remote group).
 - Inspect the served list: `curl http://127.0.0.1:8080/bans.txt`.
 - Manual list: `podman exec cs-bouncer vyos-bouncer.sh --check`.
-- Force a refresh early: `restart vyos-domain-resolver` (VyOS host) — also re-applies the group.
+- Force a refresh early: `sudo systemctl restart vyos-domain-resolver.service` (VyOS shell) —
+  re-polls every remote-group immediately.
 
 ## CI / published image
 

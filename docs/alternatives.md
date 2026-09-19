@@ -45,6 +45,6 @@ everyone until a re-sync; the sets also cannot hold CIDRs (`type ipv4_addr`, no 
 
 | Requirement | Choose |
 |---|---|
-| Config-native bans, no commits, tolerant of ~10s latency | **Default (remote-group, this project)** |
+| Config-native bans, no commits, tolerant of ~1 min latency (`interval` floor is 60s) | **Default (remote-group, this project)** |
 | Minimal latency / huge ban volume | nftables firewall-bouncer |
 | Bans must be committed config members | Original HTTPS API design (#1) |

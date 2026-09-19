@@ -7,24 +7,50 @@ No VyOS HTTPS API is involved: the bouncer container only serves a ban list over
 All commands run from config mode (`configure`) and are committed once at the end.
 `add container image` is the exception: it runs in **op-mode** (before entering `configure`).
 
-## 1. Firewall remote-group + resolver cadence
+## 1. Firewall remote-group + poll cadence
 
 The bouncer serves a newline-delimited list of active CrowdSec decisions (IPv4/IPv6
-addresses and CIDRs) at `http://127.0.0.1:8080/bans.txt`. Define one remote-group and poll it
-fast:
+addresses and CIDRs) at `http://127.0.0.1:8080/bans.txt`. Define one remote-group and give it
+its own 60s poll interval:
 
 ```bash
 set firewall group remote-group CROWDSEC-BANNED url 'http://127.0.0.1:8080/bans.txt'
 set firewall group remote-group CROWDSEC-BANNED description 'CrowdSec active decisions (LAPI mirror)'
-set firewall global-options resolver-interval '10'
+set firewall group remote-group CROWDSEC-BANNED interval '60s'
 ```
 
-- `resolver-interval 10` refreshes the group every 10s → bans apply within ~10s.
-- `resolver-interval` also drives domain-group/FQDN resolution. If you use those and don't
-  want them re-resolving every 10s, keep the global default and set a per-group interval
-  instead: `set firewall group remote-group CROWDSEC-BANNED interval '60s'` (minimum 60s →
-  bans apply within ~60s).
-- The list is cached in `/config/firewall/`, so rules keep working if the source is down.
+Deliberately **do not** set `firewall global-options resolver-interval`: the per-group
+`interval` overrides it for this group only, so the global cadence (which also drives
+`domain-group`/FQDN rule resolution) stays at VyOS's default.
+
+### The three timing knobs
+
+They sit in a **serial chain** — LAPI → container file → VyOS nftables set — so their delays
+add up:
+
+| Knob | Set where | Range / default | What it governs |
+|------|-----------|-----------------|-----------------|
+| `REFRESH_SECONDS` | bouncer container (conf/env) | shipped default `30` | how often the bouncer re-pulls LAPI's active decisions and atomically rewrites `bans.txt` |
+| remote-group `interval` | VyOS, **per group** | `60`–`2419200` s (suffixes `s/m/h/d/w`); falls back to `resolver-interval` | how often `vyos-domain-resolver` re-fetches *this* group's URL |
+| `resolver-interval` | VyOS, global | `10`–`3600` s, default `300` | fallback poll for **every** remote-group, and the resolution cadence for `domain-group`/FQDN matches |
+
+- **Worst case ≈ `REFRESH_SECONDS` + group `interval`** (+ fetch/parse time) → about **90s** with
+  the values above, ~45s typically (a decision lands mid-window on both loops). Both directions
+  ride the same loop, so expiry and manual unbans take just as long as a ban.
+- Pacing `REFRESH_SECONDS` below the group `interval` buys nothing: VyOS only looks at the file
+  once per `interval`. It is there to keep the served list fresh and to recover quickly after a
+  LAPI outage.
+- The per-group `interval` floor is **60s**; a sub-minute ban is only possible by lowering the
+  *global* `resolver-interval` (min 10s), which also makes every FQDN/domain-group re-resolve at
+  that rate. Do that only if you need it and don't use those groups.
+- 60s is ample for CrowdSec remediation: a decision is minted seconds after the offending burst,
+  and scanners/brute-forcers run for minutes — so the difference between 15s and 90s enforcement is
+  academic. Note also that with the usual `state-policy established accept`, a ban does not
+  interrupt traffic already in flight (that chain is evaluated before the rules); it blocks new
+  connections only. Drop established traffic yourself if you want sessions killed on ban.
+- VyOS caches the fetched list at `/config/firewall/R_CROWDSEC-BANNED.txt` and keeps using the
+  cached copy when a poll fails, so rules survive a container or LAPI outage. Failed polls retry
+  every `min(interval, resolver-interval)`, not at the full group interval.
 
 ## 2. Firewall policy
 
@@ -134,7 +160,7 @@ set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'
 | `SKIP_SIMULATED` | `true` | Drop decisions made in simulation mode. |
 | `ORIGINS` | empty = all | Comma-separated origin filter applied by LAPI server-side, e.g. `crowdsec,cscli` for local-only (excludes the CAPI blocklist). |
 | `BANS_FILE` | `/www/bans.txt` | Where the list is written and served. |
-| `REFRESH_SECONDS` | `5` | Refresh loop cadence (seconds). |
+| `REFRESH_SECONDS` | `30` | Refresh loop cadence (seconds). Only needs to be ≤ the group's `interval`; see [§1](#1-firewall-remote-group--poll-cadence). |
 | `HTTP_BIND` | `127.0.0.1` | Keep loopback — VyOS polls the list over the host loopback. |
 | `HTTP_PORT` | `8080` | Must match the port in the remote-group URL. |
 | `VYOS_BOUNCER_CONF` | `/etc/crowdsec/vyos-bouncer.conf` | Path of the conf to source; read from the environment only (before the conf). |
@@ -164,8 +190,8 @@ curl http://127.0.0.1:8080/bans.txt
 cscli decisions add --ip 203.0.113.7 -d 10m
 ```
 
-The member appears in the remote-group within one `resolver-interval` (~10s), as
-`R_CROWDSEC-BANNED` (IPv4) / `R6_CROWDSEC-BANNED` (IPv6).
+The member appears in the remote-group within one group `interval` (~60s, worst ~90s including
+`REFRESH_SECONDS`), as `R_CROWDSEC-BANNED` (IPv4) / `R6_CROWDSEC-BANNED` (IPv6).
 
 ## Troubleshooting
 
@@ -179,16 +205,21 @@ The member appears in the remote-group within one `resolver-interval` (~10s), as
   show container
   ```
 
-- **Remote-group stays empty / bans never appear** — check `journalctl -u vyos-domain-resolver`
-  on the router; confirm `curl http://127.0.0.1:8080/bans.txt` returns the list and that
-  `resolver-interval` (or the group's `interval`) is what you expect.
+- **Remote-group stays empty / bans never appear** — confirm `curl http://127.0.0.1:8080/bans.txt`
+  returns the list, then check that the group's own `interval` is what you expect
+  (`show configuration commands | match remote-group`); the global `resolver-interval` only matters
+  as a fallback when no per-group `interval` is set. Look at `journalctl -u vyos-domain-resolver`
+  on the router for fetch errors, and `sudo systemctl restart vyos-domain-resolver.service` (from
+  the VyOS shell) to force an immediate poll instead of waiting for the next one.
 
 ## Cleanup / uninstall
 
 ```bash
 delete container name cs-bouncer
 delete firewall group remote-group CROWDSEC-BANNED
+# only needed if you lowered the global cadence for sub-minute enforcement:
 delete firewall global-options resolver-interval
 ```
 
-Plus any firewall rules of your own that reference `CROWDSEC-BANNED`.
+Plus any firewall rules of your own that reference `CROWDSEC-BANNED`. VyOS leaves the cached list
+at `/config/firewall/R_CROWDSEC-BANNED.txt`; delete it once the group is gone.
