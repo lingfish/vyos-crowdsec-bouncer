@@ -46,13 +46,27 @@ management rules — is your call.
 
 ## 3. Container
 
+The container's settings come from a bash conf it sources at startup. The starting point is
+the example config in this repo:
+[`vyos-bouncer.conf`](vyos-bouncer.conf)
+([GitHub](https://github.com/lingfish/vyos-crowdsec-bouncer/blob/main/vyos-bouncer.conf)).
+The image also ships a copy baked in at `/etc/crowdsec/vyos-bouncer.conf`, but its `LAPI_URL`
+and `API_KEY` are **placeholders**, so you must either mount your edited copy over it or set
+those two as environment variables (see [§4](#4-environment-variables)).
+
 Place secrets and config under `/config` so they survive reboots:
 
 ```bash
 sudo mkdir -p /config/crowdsec
-sudo install -m 600 -o root -g root vyos-bouncer.conf /config/crowdsec/vyos-bouncer.conf
+curl -fsSL -o /config/crowdsec/vyos-bouncer.conf \
+  https://raw.githubusercontent.com/lingfish/vyos-crowdsec-bouncer/main/vyos-bouncer.conf
+sudo chmod 600 /config/crowdsec/vyos-bouncer.conf
 # edit /config/crowdsec/vyos-bouncer.conf and set LAPI_URL + API_KEY
 ```
+
+(Alternatively extract the template from the image:
+`podman run --rm ghcr.io/lingfish/vyos-crowdsec-bouncer:latest cat /etc/crowdsec/vyos-bouncer.conf`
+redirected into the path above.)
 
 Pull the image **first**, in op-mode. VyOS stores container images in podman's local
 storage and does **not** auto-pull them at commit — it only warns and skips starting the
@@ -83,25 +97,61 @@ Notes:
   `curl` reach LAPI outbound.
 - The container holds the **LAPI key** (in the mounted `0600` conf). The VyOS API key from
   the previous design is gone — nothing talks to the VyOS HTTPS API anymore.
-- `LAPI_URL` / `API_KEY` can instead be set as container `environment` entries; the conf is
-  only a fallback (each value yields to an already-set env var).
+- Every conf value can instead be set as a container `environment` entry; env vars always
+  win over the conf. See [§4](#4-environment-variables).
 - By default the bouncer mirrors **every** decision origin, including the CAPI community
-  blocklist (typically tens of thousands of entries). To restrict to local decisions, set
-  `ORIGINS` to a comma-separated origin list — as an env entry or in the conf — e.g.
-  `set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'`. LAPI filters
-  by origin server-side, so the container only pulls matching decisions.
+  blocklist (typically tens of thousands of entries). Restrict with `ORIGINS`
+  (see [§4](#4-environment-variables)); LAPI filters by origin server-side, so the container
+  only pulls matching decisions.
 - Persistent logs land in `show log container cs-bouncer`.
 - `restart 'always'` means `podman stop` will be immediately resurrected by systemd; use
   `podman restart` for a deliberate cold restart.
 
-## 4. Commit
+## 4. Environment variables
+
+The conf is a bash file in which every value is only applied if not already set in the
+environment:
+
+```bash
+[ -z "${LAPI_URL:-}" ] && LAPI_URL="https://lapi.example.com:8080"
+```
+
+So container `environment` entries always win over the conf, and the bouncer can run on env
+vars alone with no conf mount (the baked-in conf yields to each var you set). Set them from
+config mode:
+
+```bash
+set container name cs-bouncer environment LAPI_URL value 'https://192.0.2.10:8080'
+set container name cs-bouncer environment API_KEY value 'xxxxxxxx-xxxx-xxxx-xxxx'
+set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'
+```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LAPI_URL` | placeholder in conf | CrowdSec LAPI base URL. Self-signed HTTPS is fine (`curl -k`). |
+| `API_KEY` | placeholder in conf | Bouncer key from `cscli bouncers add`. |
+| `SCOPES` | `Ip,Range` | Comma-separated decision scopes to mirror. |
+| `SKIP_SIMULATED` | `true` | Drop decisions made in simulation mode. |
+| `ORIGINS` | empty = all | Comma-separated origin filter applied by LAPI server-side, e.g. `crowdsec,cscli` for local-only (excludes the CAPI blocklist). |
+| `BANS_FILE` | `/www/bans.txt` | Where the list is written and served. |
+| `REFRESH_SECONDS` | `5` | Refresh loop cadence (seconds). |
+| `HTTP_BIND` | `127.0.0.1` | Keep loopback — VyOS polls the list over the host loopback. |
+| `HTTP_PORT` | `8080` | Must match the port in the remote-group URL. |
+| `VYOS_BOUNCER_CONF` | `/etc/crowdsec/vyos-bouncer.conf` | Path of the conf to source; read from the environment only (before the conf). |
+
+Secrets caveat: env values are visible in `show container` and in `/config/config.boot`, so
+keep `API_KEY` in the `0600` mounted conf and use env vars mainly for non-secret tuning
+(`ORIGINS`, `REFRESH_SECONDS`, …). A good middle ground is mounting the conf read-only and
+overriding just the values you want to vary per host.
+
+## 5. Commit
 
 ```bash
 commit
 save
 ```
 
-## 5. Verify
+## 6. Verify
 
 ```bash
 # in op-mode (no `run` prefix interactively):
