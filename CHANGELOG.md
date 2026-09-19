@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] - 2026-09-19
+
+### Changed
+- **Recommended enforcement cadence is now the per-group remote-group `interval '60s'`** instead of
+  shortening the global `firewall global-options resolver-interval` to `10`. The global stays at
+  VyOS's default (300s), so ban polling no longer churns `domain-group`/FQDN resolution. Worst-case
+  ban **and** unban latency becomes ~90s (`REFRESH_SECONDS` + group `interval`) instead of ~15s —
+  still comfortably inside the window that matters for CrowdSec remediation, and with the usual
+  `state-policy established accept` a ban only blocks new connections, never in-flight traffic.
+- **`REFRESH_SECONDS` default raised `5` → `30`** (`vyos-bouncer.conf`, `entrypoint.sh`). It only
+  needs to be at or below the group `interval`; deployments pinning it via conf or env are
+  unaffected.
+- `vyos-config.md` / `README.md`: new "three timing knobs" table (ranges and defaults taken from
+  upstream vyos-1x: `resolver-interval` 10–3600s default 300s, remote-group `interval`
+  60–2419200s), plus refreshed latency claims, troubleshooting (cached
+  `/config/firewall/R_CROWDSEC-BANNED.txt`, retry cadence, forcing an immediate poll with
+  `systemctl restart vyos-domain-resolver.service`) and uninstall steps.
+- **Lab rebased onto the documented cadence** (not re-run yet): `lab/provision.sh` sets the group
+  `interval '60s'` and ships `REFRESH_SECONDS=30`; `lab/test-expiry.sh` uses a `-d 3m` ban (a 1m
+  ban could expire before VyOS installs it at this cadence) and membership windows are raised to
+  150s/300s. See the cadence caveat in `docs/lab-validation.md`.
+
 ## [0.2.1] - 2026-09-19
 
 ### Added
