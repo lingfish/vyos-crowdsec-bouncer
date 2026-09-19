@@ -30,11 +30,20 @@ fi
 : "${SCOPES:=Ip,Range}"
 : "${SKIP_SIMULATED:=true}"
 : "${BANS_FILE:=/www/bans.txt}"
+: "${ORIGINS:=}"
+
+# Empty ORIGINS = LAPI serves every origin (local crowdsec/cscli/lists AND the
+# CAPI community blocklist). When set (comma-separated), filter on the LAPI side
+# so the container only pulls matching decisions (jq @uri -> origins=a%2Cb).
+ORIGINS_ARG=""
+if [[ -n "$ORIGINS" ]]; then
+    ORIGINS_ARG="&origins=$(printf '%s' "$ORIGINS" | jq -rsR '@uri')"
+fi
 
 fetch_scope() {
     curl -sfk --max-time 20 \
         -H "X-Api-Key: $API_KEY" \
-        "$LAPI_URL/v1/decisions?scope=$1"
+        "$LAPI_URL/v1/decisions?scope=$1$ORIGINS_ARG"
 }
 
 main() {

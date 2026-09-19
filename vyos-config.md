@@ -156,6 +156,11 @@ Notes:
   the previous design is gone — nothing talks to the VyOS HTTPS API anymore.
 - `LAPI_URL` / `API_KEY` can instead be set as container `environment` entries; the conf is
   only a fallback (each value yields to an already-set env var).
+- By default the bouncer mirrors **every** decision origin, including the CAPI community
+  blocklist (typically tens of thousands of entries). To restrict to local decisions, set
+  `ORIGINS` to a comma-separated origin list — as an env entry or in the conf — e.g.
+  `set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'`. LAPI filters
+  by origin server-side, so the container only pulls matching decisions.
 - Persistent logs land in `show log container cs-bouncer`.
 - `restart 'always'` means `podman stop` will be immediately resurrected by systemd; use
   `podman restart` for a deliberate cold restart.

@@ -34,6 +34,7 @@ write_conf() {
 [ -z "\${API_KEY:-}" ] && API_KEY="test-key-123"
 [ -z "\${SCOPES:-}" ] && SCOPES="Ip,Range"
 [ -z "\${SKIP_SIMULATED:-}" ] && SKIP_SIMULATED="true"
+[ -z "\${ORIGINS:-}" ] && ORIGINS=""
 [ -z "\${BANS_FILE:-}" ] && BANS_FILE="$BANS"
 [ -z "\${REFRESH_SECONDS:-}" ] && REFRESH_SECONDS="5"
 [ -z "\${HTTP_BIND:-}" ] && HTTP_BIND="127.0.0.1"
@@ -87,6 +88,19 @@ sort -c "$BANS" 2>/dev/null && ok "list is sorted" || bad "list is sorted"
 # still succeed and write an empty list
 SCOPES="Username" "$SCRIPT" refresh
 [[ -f "$BANS" && ! -s "$BANS" ]] && ok "empty LAPI scope handled (null body)" || bad "empty LAPI scope handled"
+"$SCRIPT" refresh   # restore the full list for the failure-mode test below
+
+# origin filtering: ORIGINS=crowdsec -> only the local crowdsec-origin entries
+# (203.0.113.7/.8), CAPI/lists/simulated all excluded
+ORIGINS="crowdsec" "$SCRIPT" refresh
+grep -q '^203.0.113.7$' "$BANS" && ok "origin filter keeps crowdsec entry" || bad "origin filter keeps crowdsec entry"
+grep -q '^2001:db8::1$' "$BANS" && bad "origin filter excludes CAPI entry" || ok "origin filter excludes CAPI entry"
+grep -q '^2001:db8:abcd::/48$' "$BANS" && bad "origin filter excludes lists entry" || ok "origin filter excludes lists entry"
+[[ "$(wc -l <"$BANS")" -eq 2 ]] && ok "origin filter -> 2 entries" || bad "origin filter -> 2 entries (got $(wc -l <"$BANS"))"
+
+# multi-origin filter
+ORIGINS="crowdsec,CAPI" "$SCRIPT" refresh
+[[ "$(wc -l <"$BANS")" -eq 4 ]] && ok "origin filter crowdsec,CAPI -> 4 entries" || bad "origin filter crowdsec,CAPI -> 4 entries (got $(wc -l <"$BANS"))"
 "$SCRIPT" refresh   # restore the full list for the failure-mode test below
 
 # failure mode: LAPI outage -> refresh fails, existing list untouched
