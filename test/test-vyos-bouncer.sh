@@ -36,7 +36,7 @@ write_conf() {
 [ -z "\${SKIP_SIMULATED:-}" ] && SKIP_SIMULATED="true"
 [ -z "\${ORIGINS:-}" ] && ORIGINS=""
 [ -z "\${BANS_FILE:-}" ] && BANS_FILE="$BANS"
-[ -z "\${REFRESH_SECONDS:-}" ] && REFRESH_SECONDS="5"
+[ -z "\${REFRESH_SECONDS:-}" ] && REFRESH_SECONDS="30"
 [ -z "\${HTTP_BIND:-}" ] && HTTP_BIND="127.0.0.1"
 [ -z "\${HTTP_PORT:-}" ] && HTTP_PORT="8080"
 EOF

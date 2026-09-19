@@ -18,7 +18,7 @@ if [ -f "$CONF" ]; then
     . "$CONF"
 fi
 
-: "${REFRESH_SECONDS:=5}"
+: "${REFRESH_SECONDS:=30}"
 : "${HTTP_BIND:=127.0.0.1}"
 : "${HTTP_PORT:=8080}"
 : "${BANS_FILE:=/www/bans.txt}"

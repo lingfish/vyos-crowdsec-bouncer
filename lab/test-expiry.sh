@@ -5,6 +5,10 @@
 #   ./lab/test-expiry.sh
 #
 # Expects the lab from ./lab/provision.sh to be up.
+#
+# TTL is 3m because enforcement is paced by REFRESH_SECONDS (30s) + the remote-group
+# interval (60s): the member needs ~90s just to appear, so a 1m ban could expire before
+# VyOS ever installs it. Appearance/removal windows below carry the same margin.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -36,10 +40,10 @@ else
 fi
 
 echo "== add short-TTL ban =="
-podman exec "$LAPI_NAME" cscli decisions add --ip "$ATTACKER_IP" -d 1m >/dev/null
+podman exec "$LAPI_NAME" cscli decisions add --ip "$ATTACKER_IP" -d 3m >/dev/null
 log "waiting for member $ATTACKER_IP to appear in CROWDSEC-BANNED"
 T_APPEAR=$SECONDS
-if wait_for 90 "group member $ATTACKER_IP" member_present; then
+if wait_for 150 "group member $ATTACKER_IP" member_present; then
     log "member appeared after $((SECONDS - T_APPEAR))s"
     ok "member present in firewall group"
 else
@@ -60,7 +64,7 @@ fi
 echo "== auto-expiry (no manual delete anywhere) =="
 T_EXPIRE=$SECONDS
 REMOVED=0
-deadline=$((SECONDS + 240))
+deadline=$((SECONDS + 300))
 while ((SECONDS < deadline)); do
     if ! member_present; then
         REMOVED=1
@@ -69,10 +73,10 @@ while ((SECONDS < deadline)); do
     sleep 5
 done
 if [[ "$REMOVED" == "1" ]]; then
-    log "member auto-removed $((SECONDS - T_EXPIRE))s after expiry deadline (ttl=1m + batching)"
+    log "member auto-removed $((SECONDS - T_EXPIRE))s after expiry deadline (ttl=3m + REFRESH_SECONDS 30 + group interval 60)"
     ok "member auto-removed on LAPI expiry"
 else
-    bad "member never auto-removed within 240s"
+    bad "member never auto-removed within 300s"
 fi
 
 code="$(attacker_http_code)"

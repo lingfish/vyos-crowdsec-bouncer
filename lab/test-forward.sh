@@ -61,7 +61,7 @@ scenario() {
     podman exec "$LAPI_NAME" cscli decisions add $value >/dev/null
     log "waiting for member $member to appear in $group"
     T_APPEAR=$SECONDS
-    if wait_for 90 "group member $member" member_present "$member"; then
+    if wait_for 150 "group member $member" member_present "$member"; then
         log "member appeared after $((SECONDS - T_APPEAR))s"
         ok "member present in firewall group"
     else
@@ -86,7 +86,7 @@ scenario() {
     podman exec "$LAPI_NAME" cscli decisions delete $value >/dev/null 2>&1 || true
     log "waiting for member $member to disappear"
     T_GONE=$SECONDS
-    if wait_for 90 "group member $member removal" member_absent "$member"; then
+    if wait_for 150 "group member $member removal" member_absent "$member"; then
         log "member removed after $((SECONDS - T_GONE))s"
         ok "member removed from firewall group"
     else

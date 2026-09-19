@@ -51,7 +51,7 @@ echo "== add IPv6 ban =="
 podman exec "$LAPI_NAME" cscli decisions add --ip "$ATTACKER_IP6" -d 2h >/dev/null
 log "waiting for member $ATTACKER_IP6 to appear in CROWDSEC-BANNED"
 T_APPEAR=$SECONDS
-if wait_for 90 "group member $ATTACKER_IP6" member_present_v6; then
+if wait_for 150 "group member $ATTACKER_IP6" member_present_v6; then
     log "member appeared after $((SECONDS - T_APPEAR))s"
     ok "member present in firewall group"
 else
@@ -78,7 +78,7 @@ echo "== unban =="
 podman exec "$LAPI_NAME" cscli decisions delete --ip "$ATTACKER_IP6" >/dev/null 2>&1 || true
 log "waiting for member $ATTACKER_IP6 to disappear"
 T_GONE=$SECONDS
-if wait_for 90 "group member $ATTACKER_IP6 removal" member_absent_v6; then
+if wait_for 150 "group member $ATTACKER_IP6 removal" member_absent_v6; then
     log "member removed after $((SECONDS - T_GONE))s"
     ok "member removed from firewall group"
 else

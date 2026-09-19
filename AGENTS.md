@@ -29,8 +29,11 @@ There is **no** stock custom-bouncer, no VyOS HTTPS API, and no config commits f
 - Lab gotchas (see `lab/README.md`): the guest console is a raw TCP chardev driven by
   `lab/serial.py` (pexpect); **non-interactive SSH op commands don't work on this VyOS
   build** — use `guest_op`/`guest_root` (serial); avoid `| grep -q` under `set -o pipefail`.
-- All three scenario tests are validated green against the remote-group design (see
-  `docs/lab-validation.md`); re-run with `make lab` after `make lab-up`.
+- All three scenario tests were validated green against the remote-group design (see
+  `docs/lab-validation.md`), but under the lab's *fast* cadence (`resolver-interval 10`); the lab
+  now uses the documented production cadence (per-group `interval '60s'`, `REFRESH_SECONDS 30`)
+  and has **not been re-run** since. Re-validate with `make lab` after `make lab-up` before
+  quoting any latency numbers.
 
 ## Bouncer script contract
 
@@ -54,8 +57,13 @@ There is **no** stock custom-bouncer, no VyOS HTTPS API, and no config commits f
   environment**, so env vars win (`[ -z "${VAR:-}" ] && VAR=...`).
 - Values: `LAPI_URL`, `API_KEY`, `SCOPES` (default `Ip,Range`), `SKIP_SIMULATED` (default
   `true`), `ORIGINS` (default empty = all origins; comma-separated local-only filter, see
-  above), `BANS_FILE` (default `/www/bans.txt`), `REFRESH_SECONDS` (5), `HTTP_BIND`
+  above), `BANS_FILE` (default `/www/bans.txt`), `REFRESH_SECONDS` (30), `HTTP_BIND`
   (`127.0.0.1`), `HTTP_PORT` (8080).
+- Enforcement latency is a **serial chain** of three knobs, so their delays add: `REFRESH_SECONDS`
+  (container pulls LAPI) → VyOS remote-group `interval` (60–2419200s, min **60s**) → nft sets.
+  The global `firewall global-options resolver-interval` (10–3600s, default **300s**) is only the
+  fallback when a group has no `interval`, and it also paces `domain-group`/FQDN resolution — the
+  documented setup deliberately leaves it alone. Worst case ≈ `REFRESH_SECONDS` + `interval` (~90s).
 - `HTTP_BIND` must stay on loopback: the container runs with `allow-host-networks` and VyOS's
   `vyos-domain-resolver` polls the list at `http://127.0.0.1:8080/bans.txt`.
 

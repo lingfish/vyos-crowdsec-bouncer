@@ -5,10 +5,17 @@ End-to-end validation of the bouncer against a real VyOS instance and a real Cro
 > **Note:** the project's current design is the **firewall remote-group** model (see
 > `vyos-config.md`): no VyOS HTTPS API, no config commits — the minimal Alpine container mirrors
 > LAPI's active decisions into `bans.txt`, which VyOS polls as a single `CROWDSEC-BANNED`
-> remote-group (`resolver-interval 10`). The results below were re-recorded against that design
+> remote-group. The results below were re-recorded against that design
 > on 2026-09-18 (`make lab-up` + the three `lab-test-*` scenarios, VyOS
 > `2026.09.17-0028-rolling`, bouncer image `12fb910e3783`). All scenarios pass. The original
 > HTTPS-API + address-group design and its results are kept below for reference.
+
+> **Cadence caveat:** those numbers were measured with the lab's *fast* poll settings
+> (`resolver-interval 10`, `REFRESH_SECONDS 5`). The lab and the docs now use the recommended
+> production cadence — per-group `interval '60s'`, global `resolver-interval` left at VyOS's
+> default 300s, `REFRESH_SECONDS 30` — which every transition in ~90s instead of ~15s. The
+> 60s/30s cadence has **not been re-run yet**; treat the appearance/removal times below as
+> ~6x larger and re-validate with `make lab` before trusting them.
 
 ## Results (remote-group design)
 
@@ -26,7 +33,7 @@ End-to-end validation of the bouncer against a real VyOS instance and a real Cro
 ```
 crowdsec LAPI (host podman, 192.0.2.1:18080)
         ▲
-        │ GET /v1/decisions (X-Api-Key), polled every 5s
+        │ GET /v1/decisions (X-Api-Key), polled every 5s   <- as recorded, now 30s
         │
 VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
   └── container cs-bouncer (set container)         10.9.0.77/24 (fd00:9::77/64)
@@ -34,7 +41,7 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
         ├─ volume: /config/crowdsec/vyos-bouncer.conf → /etc/crowdsec/vyos-bouncer.conf (ro)
         └─ env: LAPI_URL, API_KEY
         ▼ serves bans.txt on 127.0.0.1:8080
-  vyos-domain-resolver → remote-group CROWDSEC-BANNED (resolver-interval 10)
+  vyos-domain-resolver → remote-group CROWDSEC-BANNED (resolver-interval 10   <- now interval 60s)
         ▼ R_CROWDSEC-BANNED / R6_CROWDSEC-BANNED nft sets (no commit)
   ipv4/ipv6 input/forward rule 100 (drop, source group remote-group)
   listener guest-eth0:8081  +  listener [fd00:9::1]:8082 (IPv6)

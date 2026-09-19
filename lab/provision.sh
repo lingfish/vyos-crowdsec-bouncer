@@ -51,7 +51,7 @@ serial --login "$GUEST_USER" "$GUEST_PASS" --timeout 900 --idle-timeout 120 \
     --cmd "set interfaces ethernet eth0 address 'dhcp'" \
     --cmd "set service ssh" \
     --cmd "set firewall group remote-group CROWDSEC-BANNED url 'http://127.0.0.1:8080/bans.txt'" \
-    --cmd "set firewall global-options resolver-interval '10'" \
+    --cmd "set firewall group remote-group CROWDSEC-BANNED interval '60s'" \
     --cmd "set firewall ipv4 input filter default-action 'accept'" \
     --cmd "set firewall ipv4 input filter rule 100 action 'drop'" \
     --cmd "set firewall ipv4 input filter rule 100 source group remote-group 'CROWDSEC-BANNED'" \
@@ -90,7 +90,7 @@ CONF="[ -z \"\${LAPI_URL:-}\" ] && LAPI_URL=\"http://$LAPI_BIND:$LAPI_PORT\"
 [ -z \"\${SCOPES:-}\" ] && SCOPES=\"Ip,Range\"
 [ -z \"\${SKIP_SIMULATED:-}\" ] && SKIP_SIMULATED=\"true\"
 [ -z \"\${BANS_FILE:-}\" ] && BANS_FILE=\"/www/bans.txt\"
-[ -z \"\${REFRESH_SECONDS:-}\" ] && REFRESH_SECONDS=\"5\"
+[ -z \"\${REFRESH_SECONDS:-}\" ] && REFRESH_SECONDS=\"30\"
 [ -z \"\${HTTP_BIND:-}\" ] && HTTP_BIND=\"127.0.0.1\"
 [ -z \"\${HTTP_PORT:-}\" ] && HTTP_PORT=\"8080\""
 CONF_B64="$(printf '%s\n' "$CONF" | base64 -w0)"
