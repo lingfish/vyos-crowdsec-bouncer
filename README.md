@@ -20,6 +20,28 @@ vyos-domain-resolver (VyOS): polls the remote-group URL (resolver-interval 10)
 VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input + forward)
 ```
 
+## Quick start
+
+1. **Register the bouncer on your central LAPI** and note the API key:
+
+   ```bash
+   cscli bouncers add vyos-bouncer -o raw
+   ```
+
+2. **Configure VyOS** per [`vyos-config.md`](vyos-config.md): pull the published image in
+   op-mode (`add container image`), define the remote-group + resolver cadence, the drop
+   rules referencing it, and the container with the mounted conf (or environment variables).
+   Commit and save.
+
+3. **Verify** — force a test ban from the LAPI host:
+
+   ```bash
+   cscli decisions add --ip 203.0.113.7 -d 10m
+   ```
+
+   It appears in `show firewall group` within one `resolver-interval` (~10s) and disappears
+   on its own at expiry. More checks in [`vyos-config.md`](vyos-config.md).
+
 ## Why this design
 
 - **No config commits for bans.** VyOS's `remote-group` mechanism re-renders only the affected
@@ -58,63 +80,6 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 | `lab/` | reproducible isolated VyOS + LAPI lab (`make lab-up` / `lab-test-expiry` / `lab-test-ipv6` / `lab-test-forward` / `lab-down`) |
 | [`docs/lab-validation.md`](docs/lab-validation.md) | end-to-end results against a real VyOS + LAPI (remote-group design, all scenarios green) |
 
-## Validation
-
-See [`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for the reproducible
-harness (`make lab`). Validated green against the remote-group design on VyOS rolling
-`2026.09.17-0028`: short-TTL auto-expiry, IPv6 ban/unban, and forward-path drops all pass.
-
-## CI / published image
-
-GitHub Actions (`.github/workflows/ci.yml`) runs on every push and PR:
-
-- `make test` + `make check` (mock LAPI, no VyOS/container needed).
-- Builds the image on every run and, on a `v*` tag, publishes it to
-  [`ghcr.io/lingfish/vyos-crowdsec-bouncer`](https://github.com/lingfish/vyos-crowdsec-bouncer/pkgs).
-
-Tags published to GHCR for a `v1.2.3` tag: `1.2.3`, `1.2`, `1`, `latest`.
-
-To cut a release:
-
-```bash
-git tag v1.2.3 && git push origin v1.2.3
-```
-
-PRs build the image but never push. `make push` publishes a locally built image to the same
-registry (requires a `podman login` to GHCR first).
-
-## Quick start
-
-1. **Register the bouncer on your central LAPI** and note the API key:
-
-   ```bash
-   cscli bouncers add vyos-bouncer -o raw
-   ```
-
-2. **Configure VyOS** per [`vyos-config.md`](vyos-config.md): the remote-group + `resolver-interval`,
-   the drop rules referencing it, and the container definition.
-
-3. **Get the image** — either pull the published build or build locally:
-
-   ```bash
-   # published image (see "CI / published image" below)
-   podman pull ghcr.io/lingfish/vyos-crowdsec-bouncer:latest
-
-   # or build locally (podman)
-   make build
-   ```
-
-   On the VyOS box the image is pulled via `add container image` (op-mode), not `podman pull` —
-   see [`vyos-config.md`](vyos-config.md). The image is **linux/amd64 only**; an arm64 VyOS
-   router will refuse to run it.
-
-4. **Test locally** (no VyOS needed):
-
-   ```bash
-   make test   # runs vyos-bouncer.sh against a mock LAPI
-   make check  # prints the list the bouncer would serve
-   ```
-
 ## Bouncer behavior (`vyos-bouncer.sh`)
 
 - `vyos-bouncer.sh refresh` — fetch `scope=Ip` and `scope=Range` decisions from LAPI
@@ -145,6 +110,46 @@ registry (requires a `podman login` to GHCR first).
 - Inspect the served list: `curl http://127.0.0.1:8080/bans.txt`.
 - Manual list: `podman exec cs-bouncer vyos-bouncer.sh --check`.
 - Force a refresh early: `restart vyos-domain-resolver` (VyOS host) — also re-applies the group.
+
+## CI / published image
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push and PR:
+
+- `make test` + `make check` (mock LAPI, no VyOS/container needed).
+- Builds the image on every run and, on a `v*` tag, publishes it to
+  [`ghcr.io/lingfish/vyos-crowdsec-bouncer`](https://github.com/lingfish/vyos-crowdsec-bouncer/pkgs).
+
+Tags published to GHCR for a `v1.2.3` tag: `1.2.3`, `1.2`, `1`, `latest`. The image is
+**linux/amd64 only**; an arm64 VyOS router will refuse to run it.
+
+To cut a release:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+PRs build the image but never push. `make push` publishes a locally built image to the same
+registry (requires a `podman login` to GHCR first).
+
+## Development & testing
+
+```bash
+make test   # integration test of vyos-bouncer.sh against a mock LAPI (test/mock-lapi.py)
+make check  # same harness, only exercises --check mode
+make build  # build the container image locally (ENGINE=podman by default)
+```
+
+End-to-end lab: `make lab-up` boots the latest VyOS rolling nightly under libvirt on an
+isolated `192.0.2.0/24` network with a host LAPI and the bouncer; `make lab` then runs the
+three scenario tests (short-TTL expiry, IPv6, forward-path). See
+[`lab/README.md`](lab/README.md) for prerequisites and gotchas; `make lab-down` tears it
+down.
+
+## Validation
+
+See [`docs/lab-validation.md`](docs/lab-validation.md) and `lab/` for the reproducible
+harness (`make lab`). Validated green against the remote-group design on VyOS rolling
+`2026.09.17-0028`: short-TTL auto-expiry, IPv6 ban/unban, and forward-path drops all pass.
 
 ## License
 
