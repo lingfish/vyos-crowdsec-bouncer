@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] - 2026-09-19
+
+### Added
+
+- **`ORIGINS` decision-origin filter.** New config value (comma-separated origins, default
+  empty = all). When set, the bouncer appends `&origins=<url-encoded>` to each LAPI fetch so
+  CrowdSec filters by origin server-side. Lets deployments exclude the CAPI community
+  blocklist and mirror only local decisions (e.g. `ORIGINS="crowdsec,cscli"`).
+
 ## [0.2.0] - 2026-09-18
 
 ### Changed (breaking)
