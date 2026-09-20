@@ -5,8 +5,8 @@
 #
 # Downloads the latest VyOS rolling nightly ISO, boots it in an isolated
 # libvirt network (192.0.2.0/24, no LAN/internet access), configures the
-# bouncer stack exactly like production (VyOS HTTPS API + firewall groups +
-# `set container`), and stages the in-guest attacker netns + listener used
+# bouncer stack exactly like production (firewall remote-group + `set container`),
+# and stages the in-guest attacker netns + listener used
 # by lab/test-expiry.sh.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

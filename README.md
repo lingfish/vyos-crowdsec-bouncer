@@ -5,7 +5,7 @@ active decisions to a served list, and a VyOS **firewall remote-group** polls th
 applies it as nftables set members. It fills the same role as CrowdSec's own
 [blocklist-mirror bouncer](https://github.com/crowdsecurity/crowdsec-blocklist-mirror) — a
 *passive* bouncer that exposes active decisions as a consumable list — built on stock VyOS
-machinery rather than the custom-bouncer SDK.
+machinery.
 
 The CrowdSec Security Engine (agent + LAPI) is expected to run **centrally** — this project only
 ships the bouncer. The only custom code is `vyos-bouncer.sh`; the container image is a minimal
@@ -50,8 +50,8 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 
 - **No config commits for bans.** VyOS's `remote-group` mechanism re-renders only the affected
   nftables sets (`R_*` / `R6_*`) on a timer — adding or removing a decision never triggers a
-  VyOS `commit`. This is the whole point: per-decision commits (the previous design's approach)
-  churned the whole firewall config on every ban.
+  VyOS `commit`. This keeps ban updates isolated to the affected firewall sets instead of
+   churning the whole firewall config on every ban.
 - **Pull-based, so expiry is free.** `GET /v1/decisions` only returns *active* decisions, so a
   decision that expires or is deleted simply disappears from the next served list — no del
   events, no TTL bookkeeping, no missed-delete accumulation.
@@ -61,8 +61,8 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
   can never present an empty list that would clear all bans.
 - **Stock where it counts**: LAPI streaming, filtering and the remote-group refresh are all
   stock CrowdSec / VyOS. We only write a fetch-and-serve script.
-- **No privileged access**: no `net-admin`, no direct nftables manipulation, no VyOS HTTPS API
-  or API key.
+- **No privileged access**: no `net-admin`, no direct nftables manipulation, and no host firewall
+  writes. The container only needs the LAPI credential.
 
 ### Trade-offs
 
@@ -82,7 +82,7 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
   never interrupted in-flight traffic at 15s either.) Sub-minute enforcement requires lowering the
   **global** `resolver-interval` (min 10s), which also re-resolves every FQDN/domain group at that
   rate — see [`vyos-config.md`](vyos-config.md#1-firewall-remote-group--poll-cadence).
-- **No Prometheus metrics** from the stock bouncer (dropped with the custom-bouncer image).
+- **No Prometheus metrics**; metrics are outside the scope of this passive mirror.
 
 ## Components
 

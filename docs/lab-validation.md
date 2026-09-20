@@ -2,13 +2,11 @@
 
 End-to-end validation of the bouncer against a real VyOS instance and a real CrowdSec LAPI.
 
-> **Note:** the project's current design is the **firewall remote-group** model (see
-> `vyos-config.md`): no VyOS HTTPS API, no config commits — the minimal Alpine container mirrors
-> LAPI's active decisions into `bans.txt`, which VyOS polls as a single `CROWDSEC-BANNED`
-> remote-group. The results below were re-recorded against that design
+> **Note:** the project's design is the **firewall remote-group** model (see
+> `vyos-config.md`): the minimal Alpine container mirrors LAPI's active decisions into `bans.txt`,
+> which VyOS polls as a single `CROWDSEC-BANNED` remote-group. The results below were recorded
 > on 2026-09-18 (`make lab-up` + the three `lab-test-*` scenarios, VyOS
-> `2026.09.17-0028-rolling`, bouncer image `12fb910e3783`). All scenarios pass. The original
-> HTTPS-API + address-group design and its results are kept below for reference.
+> `2026.09.17-0028-rolling`, bouncer image `12fb910e3783`). All scenarios pass.
 
 > **Cadence caveat:** those numbers were measured with the lab's *fast* poll settings
 > (`resolver-interval 10`, `REFRESH_SECONDS 5`). The lab and the docs now use the recommended
@@ -54,28 +52,6 @@ VyOS rolling (QEMU/KVM)                          attacker netns (in VyOS)
 - LAPI: `crowdsecurity/crowdsec` container (host podman).
 - VyOS: rolling nightly ISO booted under QEMU/KVM (live image).
 - Bouncer: this project's image, deployed the production way via VyOS `set container`.
-
-## Results (original design, for reference)
-
-| Test | Method | Result |
-|------|--------|--------|
-| VyOS API contract | `POST /retrieve`, `/configure`, `/show` with form key | `success: true`; `firewall group address-group X address IP` path accepted |
-| Ban (IPv4) | `cscli decisions add --ip 10.9.0.77 -d 2h` | member appears in `CROWDSEC-BANNED`, referenced by `ipv4-input-filter-100` **and** `ipv4-forward-filter-100` |
-| Packet drop | netns attacker (src `10.9.0.77`) → listener `10.0.2.15:8081` | `000` / 3s timeout (dropped) |
-| Unban | `cscli decisions delete --ip 10.9.0.77` | member removed (`N/D`); attacker recovers (`200`, ~1ms) |
-| CIDR → network-group | `cscli decisions add --range 198.51.100.0/24` | member appears in `CROWDSEC-BANNED-NET` (`network_group`) |
-| Startup re-sync / reboot recovery | decision active in LAPI, group wiped, cold `podman restart` | logs `adding 1 decision`; member repopulated |
-| Batching | 20 concurrent ops (unit harness) | 1 batched `/configure` request |
-| **Short-TTL auto-expiry** | `cscli decisions add --ip 10.9.0.77 -d 1m`, then **no manual delete**; member polled until gone | member appeared (`17s`), traffic dropped (`000`); member **auto-removed ~57s after the 1m expiry**, attacker recovered (`200`). *Issue 3.* |
-| Ban (IPv6) | `cscli decisions add --ip fd00:9::77 -d 2h` | member appears in `CROWDSEC-BANNED-V6` (`ipv6-address-group`) after `16s`, referenced by `ipv6-input-filter-100` **and** `ipv6-forward-filter-100` (`ip6 saddr @A6_CROWDSEC-BANNED-V6`). *Issue 1.* |
-| Packet drop (IPv6) | netns attacker (src `fd00:9::77`) → listener `[fd00:9::1]:8082` | `000` / 5s timeout (dropped) |
-| Unban (IPv6) | `cscli decisions delete --ip fd00:9::77` | member removed after `13s` (`N/D`); attacker recovers (`200`, ~1ms) |
-| **Forward drop (IPv4)** | ban `--ip 10.9.0.77` → attacker netns → **routed server netns** `10.9.1.10:8083` (transits FORWARD) | member in `CROWDSEC-BANNED` after `17s`; `000` while banned; removed `16s`; `200` after unban. Destination is not a VyOS address, so only the forward hook can drop it. *Issue 2.* |
-| **Forward drop (CIDR)** | ban `--range 10.9.0.0/24` → same routed server | member in `CROWDSEC-BANNED-NET` (`network-group`) after `9s`; `000` → removed `13s` → `200`. Forward rule 101. *Issue 2.* |
-| **Forward drop (IPv6)** | ban `--ip fd00:9::77` → routed server `[fd00:9:1::10]:8084` | member in `CROWDSEC-BANNED-V6` after `10s`; `000` → removed `13s` → `200`. Forward rule 100 (v6). *Issue 2.* |
-
-Control observations: unbanned source = `200` (~1ms); banned source = `000` (3s). The only
-variable is group membership, so the drop is attributable to the bouncer.
 
 ## Findings (fixed / documented)
 
@@ -127,8 +103,7 @@ non-interactive SSH limitation on this VyOS build, etc.).
 
 - VyOS: rolling nightly `2026.09.17-0028` (QEMU/KVM, 2 vCPU, 2 GB).
 - CrowdSec LAPI image: `crowdsecurity/crowdsec` (latest at test time).
-- Bouncer image: `vyos-crowdsec-bouncer:latest` (minimal Alpine + busybox `httpd`, no
-  custom-bouncer, no VyOS HTTPS API).
+- Bouncer image: `vyos-crowdsec-bouncer:latest` (minimal Alpine + busybox `httpd`).
 - podman in guest: 5.8.4; host: 5.4.2.
 
 ## Not covered here

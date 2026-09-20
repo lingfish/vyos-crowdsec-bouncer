@@ -1,7 +1,7 @@
 # Minimal image: serve CrowdSec's active decisions as a static newline-
-# delimited list that VyOS firewall remote-groups poll. No privileged access,
-# no VyOS HTTPS API, no host firewall writes. busybox httpd binds loopback
-# only (host networking) and serves the list written by the refresh loop.
+# delimited list that VyOS firewall remote-groups poll. No privileged access or
+# host firewall writes. busybox httpd binds loopback only (host networking) and
+# serves the list written by the refresh loop.
 
 FROM alpine:3.21
 

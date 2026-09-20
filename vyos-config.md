@@ -1,8 +1,8 @@
 # VyOS configuration for the CrowdSec bouncer
 
 This uses the VyOS [remote-group](https://docs.vyos.io/en/1.5/configuration/firewall/groups.html#remote-groups) feature.
-No VyOS HTTPS API is involved: the bouncer container only serves a ban list over loopback HTTP and VyOS's
-`vyos-domain-resolver` polls it and updates nftables sets in place (no config commit per ban).
+The bouncer container serves a ban list over loopback HTTP; VyOS's `vyos-domain-resolver` polls it
+and updates nftables sets in place (no config commit per ban).
 
 All commands run from config mode (`configure`) and are committed once at the end.
 `add container image` is the exception: it runs in **op-mode** (before entering `configure`).
@@ -110,8 +110,7 @@ Notes:
 - Only `LAPI_URL` and `API_KEY` are mandatory — the baked-in conf ships placeholders for both,
   and the script refuses to start without them. Nothing else needs an env entry unless you
   want to change a shipped default.
-- The VyOS API key from the previous design is gone — nothing talks to the VyOS HTTPS API
-  anymore.
+- The container communicates with LAPI only; the only required credential is the LAPI key.
 - By default the bouncer mirrors **every** decision origin, including the CAPI community
   blocklist (typically tens of thousands of entries). Restrict with `ORIGINS`; LAPI filters by
   origin server-side, so the container only pulls matching decisions.

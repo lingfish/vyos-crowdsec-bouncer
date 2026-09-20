@@ -5,7 +5,7 @@
 CrowdSec bouncer that runs as a VyOS container and enforces LAPI decisions by serving a ban
 list that VyOS consumes as a firewall **remote-group**. The only custom code is
 `vyos-bouncer.sh` (+ `entrypoint.sh`); the image is minimal Alpine running busybox `httpd`.
-There is **no** stock custom-bouncer, no VyOS HTTPS API, and no config commits for bans.
+It is a passive list mirror: it makes no host firewall writes and no config commits for bans.
 
 ## Commands
 
