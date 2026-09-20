@@ -1,7 +1,11 @@
 # VyOS CrowdSec Bouncer
 
-A CrowdSec remediation component that runs as a **VyOS container** and enforces LAPI decisions
-by feeding a **firewall remote-group** that VyOS polls and applies as nftables set members.
+A CrowdSec **blocklist-mirror bouncer** that runs as a **VyOS container**: it mirrors LAPI's
+active decisions to a served list, and a VyOS **firewall remote-group** polls that list and
+applies it as nftables set members. It fills the same role as CrowdSec's own
+[blocklist-mirror bouncer](https://github.com/crowdsecurity/crowdsec-blocklist-mirror) — a
+*passive* bouncer that exposes active decisions as a consumable list — built on stock VyOS
+machinery rather than the custom-bouncer SDK.
 
 The CrowdSec Security Engine (agent + LAPI) is expected to run **centrally** — this project only
 ships the bouncer. The only custom code is `vyos-bouncer.sh`; the container image is a minimal
@@ -30,8 +34,8 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 
 2. **Configure VyOS** per [`vyos-config.md`](vyos-config.md): pull the published image in
    op-mode (`add container image`), define the remote-group + resolver cadence, the drop
-   rules referencing it, and the container with the mounted conf (or environment variables).
-   Commit and save.
+   rules referencing it, and the container configured with its environment variables (the
+   default; a mounted conf is optional). Commit and save.
 
 3. **Verify** — force a test ban from the LAPI host:
 
@@ -86,7 +90,7 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 |------|---------|
 | `vyos-bouncer.sh` | fetch active LAPI decisions, write the list atomically (`refresh` / `--check`) |
 | `entrypoint.sh` | gate httpd on first successful refresh, run the refresh loop, serve |
-| `vyos-bouncer.conf` | LAPI URL/key, scopes, origin filter, refresh cadence, HTTP bind (mounted, `0600`) |
+| `vyos-bouncer.conf` | shipped defaults (env-var overridable); mount a `0600` copy for the LAPI key |
 | `Dockerfile` | Alpine + `curl`/`bash`/`jq`/`busybox-extras`, loopback `httpd` PID1 |
 | [`vyos-config.md`](vyos-config.md) | copy-paste VyOS configuration |
 | `test/` | mock LAPI + integration test harness |
@@ -109,8 +113,8 @@ VyOS firewall rules: source group remote-group CROWDSEC-BANNED → drop (input +
 
 ## Security
 
-- The container holds the **LAPI key** in a `0600` conf mounted from `/config`. Keep the LAPI
-  key scoped to this bouncer.
+- The **LAPI key** goes in as a container env var by default, or in a `0600` conf mounted from
+  `/config` to keep it out of the commit config. Keep the key scoped to this bouncer.
 - busybox `httpd` binds **loopback only** (`127.0.0.1:8080`), and the container uses
   `allow-host-networks`, so the served list is only reachable by VyOS itself — it is not
   exposed on the WAN.

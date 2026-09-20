@@ -72,27 +72,13 @@ management rules — is your call.
 
 ## 3. Container
 
-The container's settings come from a bash conf it sources at startup. The starting point is
-the example config in this repo:
-[`vyos-bouncer.conf`](vyos-bouncer.conf)
-([GitHub](https://github.com/lingfish/vyos-crowdsec-bouncer/blob/main/vyos-bouncer.conf)).
-The image also ships a copy baked in at `/etc/crowdsec/vyos-bouncer.conf`, but its `LAPI_URL`
-and `API_KEY` are **placeholders**, so you must either mount your edited copy over it or set
-those two as environment variables (see [§4](#4-environment-variables)).
-
-Place secrets and config under `/config` so they survive reboots:
-
-```bash
-sudo mkdir -p /config/crowdsec
-curl -fsSL -o /config/crowdsec/vyos-bouncer.conf \
-  https://raw.githubusercontent.com/lingfish/vyos-crowdsec-bouncer/main/vyos-bouncer.conf
-sudo chmod 600 /config/crowdsec/vyos-bouncer.conf
-# edit /config/crowdsec/vyos-bouncer.conf and set LAPI_URL + API_KEY
-```
-
-(Alternatively extract the template from the image:
-`podman run --rm ghcr.io/lingfish/vyos-crowdsec-bouncer:latest cat /etc/crowdsec/vyos-bouncer.conf`
-redirected into the path above.)
+The container's settings come from a bash conf it sources at startup. The image ships the
+example [`vyos-bouncer.conf`](vyos-bouncer.conf) baked in at `/etc/crowdsec/vyos-bouncer.conf`;
+its `LAPI_URL` and `API_KEY` are **placeholders**, so you must supply those two, while every
+other value has a sane shipped default (table below) and only needs an override if you want to
+change it. **The default and recommended way to run is with container environment variables** —
+each var always wins over the conf. Mounting a conf instead is an opt-in for keeping `API_KEY`
+out of the commit config, covered in [§4](#4-mounted-conf-optional).
 
 Pull the image **first**, in op-mode. VyOS stores container images in podman's local
 storage and does **not** auto-pull them at commit — it only warns and skips starting the
@@ -108,9 +94,9 @@ Then enter config mode and configure the container:
 ```bash
 set container name cs-bouncer image 'ghcr.io/lingfish/vyos-crowdsec-bouncer:latest'
 set container name cs-bouncer allow-host-networks
-set container name cs-bouncer volume 'bouncer-conf' source '/config/crowdsec/vyos-bouncer.conf'
-set container name cs-bouncer volume 'bouncer-conf' destination '/etc/crowdsec/vyos-bouncer.conf'
-set container name cs-bouncer volume 'bouncer-conf' mode 'ro'
+set container name cs-bouncer environment LAPI_URL value 'https://192.0.2.10:8080'
+set container name cs-bouncer environment API_KEY value 'xxxxxxxx-xxxx-xxxx-xxxx'
+set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'   # optional
 set container name cs-bouncer restart 'always'
 ```
 
@@ -121,36 +107,28 @@ Notes:
   capabilities needed.
 - `allow-host-networks` gives the container the host loopback (for VyOS to poll) and lets
   `curl` reach LAPI outbound.
-- The container holds the **LAPI key** (in the mounted `0600` conf). The VyOS API key from
-  the previous design is gone — nothing talks to the VyOS HTTPS API anymore.
-- Every conf value can instead be set as a container `environment` entry; env vars always
-  win over the conf. See [§4](#4-environment-variables).
+- Only `LAPI_URL` and `API_KEY` are mandatory — the baked-in conf ships placeholders for both,
+  and the script refuses to start without them. Nothing else needs an env entry unless you
+  want to change a shipped default.
+- The VyOS API key from the previous design is gone — nothing talks to the VyOS HTTPS API
+  anymore.
 - By default the bouncer mirrors **every** decision origin, including the CAPI community
-  blocklist (typically tens of thousands of entries). Restrict with `ORIGINS`
-  (see [§4](#4-environment-variables)); LAPI filters by origin server-side, so the container
-  only pulls matching decisions.
+  blocklist (typically tens of thousands of entries). Restrict with `ORIGINS`; LAPI filters by
+  origin server-side, so the container only pulls matching decisions.
 - Persistent logs land in `show log container cs-bouncer`.
 - `restart 'always'` means `podman stop` will be immediately resurrected by systemd; use
   `podman restart` for a deliberate cold restart.
 
-## 4. Environment variables
+### Environment variables
 
-The conf is a bash file in which every value is only applied if not already set in the
-environment:
+Each conf line only applies when the variable isn't already set in the environment:
 
 ```bash
 [ -z "${LAPI_URL:-}" ] && LAPI_URL="https://lapi.example.com:8080"
 ```
 
-So container `environment` entries always win over the conf, and the bouncer can run on env
-vars alone with no conf mount (the baked-in conf yields to each var you set). Set them from
-config mode:
-
-```bash
-set container name cs-bouncer environment LAPI_URL value 'https://192.0.2.10:8080'
-set container name cs-bouncer environment API_KEY value 'xxxxxxxx-xxxx-xxxx-xxxx'
-set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'
-```
+So a container `environment` entry always wins over the conf, and the bouncer runs on env vars
+alone with no conf mount at all.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -165,16 +143,46 @@ set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'
 | `HTTP_PORT` | `8080` | Must match the port in the remote-group URL. |
 | `VYOS_BOUNCER_CONF` | `/etc/crowdsec/vyos-bouncer.conf` | Path of the conf to source; read from the environment only (before the conf). |
 
+## 4. Mounted conf (optional)
+
+Environment vars are the default for a reason — but they are part of the commit config (see the
+caveat below). If you'd rather keep `API_KEY` out of the config tree and archives, mount your own
+`0600` conf over the baked-in copy instead. Place it under `/config` so it survives reboots:
+
+```bash
+sudo mkdir -p /config/crowdsec
+curl -fsSL -o /config/crowdsec/vyos-bouncer.conf \
+  https://raw.githubusercontent.com/lingfish/vyos-crowdsec-bouncer/main/vyos-bouncer.conf
+sudo chmod 600 /config/crowdsec/vyos-bouncer.conf
+# edit /config/crowdsec/vyos-bouncer.conf and set LAPI_URL + API_KEY
+```
+
+(Alternatively extract the template from the image:
+`podman run --rm ghcr.io/lingfish/vyos-crowdsec-bouncer:latest cat /etc/crowdsec/vyos-bouncer.conf`
+redirected into the path above.)
+
+Keep the mounted conf **minimal — only the values you actually override** (`LAPI_URL`,
+`API_KEY`, optionally `ORIGINS`, …); everything else comes from the baked-in defaults, so
+upgrading the image never requires re-copying the file. Env vars still win over the file if
+you also set any.
+
+Add these lines to the [§3](#3-container) container config instead of the corresponding
+`environment` entries:
+
+```bash
+set container name cs-bouncer volume 'bouncer-conf' source '/config/crowdsec/vyos-bouncer.conf'
+set container name cs-bouncer volume 'bouncer-conf' destination '/etc/crowdsec/vyos-bouncer.conf'
+set container name cs-bouncer volume 'bouncer-conf' mode 'ro'
+```
+
 Secrets caveat: container `environment` values are part of the commit config, so they show up in
 `show configuration` (any admin, op-mode) and in `/config/config.boot` — and in every config
 archive under `/config/archive/`, since VyOS retains all committed configs. `sudo podman inspect`
 shows the container's runtime env too. (`show container` only lists running containers —
-`podman ps -a` — and does **not** reveal env values.) Keep `API_KEY` in the `0600` mounted conf
-so it never enters the config tree or the archives; that is defense-in-depth rather than a hard
+`podman ps -a` — and does **not** reveal env values.) A `0600` mounted conf keeps `API_KEY` out
+of the config tree and archives entirely. That is defense-in-depth rather than a hard
 requirement — this key is read-only against your own LAPI, so env-only deployment is fine if you
-accept it appearing in the config. Use env vars mainly for non-secret tuning (`ORIGINS`,
-`REFRESH_SECONDS`, …). A good middle ground is mounting the conf read-only and overriding just
-the values you want to vary per host.
+accept the key appearing in the config. If you use both, env vars override the conf.
 
 ## 5. Commit
 
