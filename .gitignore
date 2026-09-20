@@ -3,3 +3,4 @@ spool/
 .env
 test/tmp/
 lab/.cache/
+.vscode/
