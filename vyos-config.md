@@ -165,10 +165,16 @@ set container name cs-bouncer environment ORIGINS value 'crowdsec,cscli'
 | `HTTP_PORT` | `8080` | Must match the port in the remote-group URL. |
 | `VYOS_BOUNCER_CONF` | `/etc/crowdsec/vyos-bouncer.conf` | Path of the conf to source; read from the environment only (before the conf). |
 
-Secrets caveat: env values are visible in `show container` and in `/config/config.boot`, so
-keep `API_KEY` in the `0600` mounted conf and use env vars mainly for non-secret tuning
-(`ORIGINS`, `REFRESH_SECONDS`, …). A good middle ground is mounting the conf read-only and
-overriding just the values you want to vary per host.
+Secrets caveat: container `environment` values are part of the commit config, so they show up in
+`show configuration` (any admin, op-mode) and in `/config/config.boot` — and in every config
+archive under `/config/archive/`, since VyOS retains all committed configs. `sudo podman inspect`
+shows the container's runtime env too. (`show container` only lists running containers —
+`podman ps -a` — and does **not** reveal env values.) Keep `API_KEY` in the `0600` mounted conf
+so it never enters the config tree or the archives; that is defense-in-depth rather than a hard
+requirement — this key is read-only against your own LAPI, so env-only deployment is fine if you
+accept it appearing in the config. Use env vars mainly for non-secret tuning (`ORIGINS`,
+`REFRESH_SECONDS`, …). A good middle ground is mounting the conf read-only and overriding just
+the values you want to vary per host.
 
 ## 5. Commit
 
